@@ -1,0 +1,59 @@
+<?php
+
+namespace App\Http\Controllers;
+
+use App\Models\Usuario;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Hash;
+use Illuminate\Validation\ValidationException;
+
+class AuthController extends Controller
+{
+    public function login(Request $request)
+    {
+        $request->validate([
+            'email'    => 'required|email',
+            'password' => 'required|string',
+        ]);
+
+        $usuario = Usuario::where('email', $request->email)
+                          ->where('activo', true)
+                          ->first();
+
+        if (! $usuario || ! Hash::check($request->password, $usuario->password)) {
+            throw ValidationException::withMessages([
+                'email' => ['Las credenciales no son correctas.'],
+            ]);
+        }
+
+        $token = $usuario->createToken('decasa-token')->plainTextToken;
+
+        return response()->json([
+            'token'             => $token,
+            'nombre'            => $usuario->nombre,
+            'rol'               => $usuario->rol,
+            'tienda_default_id' => $usuario->tienda_default_id,
+        ]);
+    }
+
+    public function logout(Request $request)
+    {
+        $request->user()->currentAccessToken()->delete();
+
+        return response()->json(['message' => 'Sesión cerrada.']);
+    }
+
+    public function me(Request $request)
+    {
+        $usuario = $request->user()->load('tiendaDefault:id,nombre,ciudad');
+
+        return response()->json([
+            'id'                => $usuario->id,
+            'nombre'            => $usuario->nombre,
+            'email'             => $usuario->email,
+            'rol'               => $usuario->rol,
+            'tienda_default_id' => $usuario->tienda_default_id,
+            'tienda_default'    => $usuario->tiendaDefault,
+        ]);
+    }
+}

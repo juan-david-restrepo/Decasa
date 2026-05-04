@@ -1,0 +1,170 @@
+<script setup>
+import { ref, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
+import { createUsuario } from '@/api/usuarios'
+import { getTiendas } from '@/api/ordenes'
+
+const router = useRouter()
+
+const tiendas = ref([])
+const submitting = ref(false)
+const error = ref('')
+
+const form = ref({
+  nombre: '',
+  email: '',
+  password: '',
+  password_confirmation: '',
+  rol: 'vendedor',
+  tienda_default_id: '',
+})
+
+const errores = ref({})
+
+onMounted(async () => {
+  try {
+    const { data } = await getTiendas()
+    tiendas.value = data
+  } catch {}
+})
+
+function validar() {
+  errores.value = {}
+  if (!form.value.nombre.trim()) errores.value.nombre = 'El nombre es obligatorio'
+  if (!form.value.email.trim()) errores.value.email = 'El email es obligatorio'
+  else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.value.email)) errores.value.email = 'Email inválido'
+  if (!form.value.password) errores.value.password = 'La contraseña es obligatoria'
+  else if (form.value.password.length < 8) errores.value.password = 'Mínimo 8 caracteres'
+  if (form.value.password !== form.value.password_confirmation) errores.value.password_confirmation = 'Las contraseñas no coinciden'
+  if (!form.value.tienda_default_id) errores.value.tienda_default_id = 'Selecciona una tienda'
+  return Object.keys(errores.value).length === 0
+}
+
+async function submit() {
+  error.value = ''
+  if (!validar()) return
+
+  submitting.value = true
+  try {
+    await createUsuario({
+      nombre: form.value.nombre.trim(),
+      email: form.value.email.trim(),
+      password: form.value.password,
+      rol: form.value.rol,
+      tienda_default_id: form.value.tienda_default_id,
+    })
+    router.push({ name: 'usuarios' })
+  } catch (e) {
+    const data = e.response?.data
+    if (data?.errors) {
+      errores.value = data.errors
+    } else {
+      error.value = data?.message ?? 'Error al crear el usuario'
+    }
+  } finally {
+    submitting.value = false
+  }
+}
+</script>
+
+<template>
+  <div class="p-4 max-w-lg mx-auto space-y-4 pb-8">
+    <!-- Header -->
+    <div class="flex items-center gap-3">
+      <button @click="router.back()" class="text-blue-600 text-sm font-medium">← Atrás</button>
+      <h2 class="text-lg font-bold text-gray-800 flex-1">Crear usuario</h2>
+    </div>
+
+    <!-- Formulario -->
+    <form @submit.prevent="submit" class="space-y-4">
+      <!-- Nombre -->
+      <div>
+        <label class="block text-sm font-medium text-gray-700 mb-1">Nombre completo *</label>
+        <input
+          v-model="form.nombre"
+          class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+          placeholder="Nombre del usuario"
+          :class="{ 'border-red-400': errores.nombre }"
+        />
+        <p v-if="errores.nombre" class="text-xs text-red-600 mt-1">{{ errores.nombre[0] ?? errores.nombre }}</p>
+      </div>
+
+      <!-- Email -->
+      <div>
+        <label class="block text-sm font-medium text-gray-700 mb-1">Email *</label>
+        <input
+          v-model="form.email"
+          type="email"
+          class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+          placeholder="correo@decasa.com"
+          :class="{ 'border-red-400': errores.email }"
+        />
+        <p v-if="errores.email" class="text-xs text-red-600 mt-1">{{ errores.email[0] ?? errores.email }}</p>
+      </div>
+
+      <!-- Contraseña -->
+      <div class="grid grid-cols-2 gap-3">
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-1">Contraseña *</label>
+          <input
+            v-model="form.password"
+            type="password"
+            class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            placeholder="Mín. 8 caracteres"
+            :class="{ 'border-red-400': errores.password }"
+          />
+          <p v-if="errores.password" class="text-xs text-red-600 mt-1">{{ errores.password[0] ?? errores.password }}</p>
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-1">Confirmar *</label>
+          <input
+            v-model="form.password_confirmation"
+            type="password"
+            class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            placeholder="Repetir contraseña"
+            :class="{ 'border-red-400': errores.password_confirmation }"
+          />
+          <p v-if="errores.password_confirmation" class="text-xs text-red-600 mt-1">{{ errores.password_confirmation[0] ?? errores.password_confirmation }}</p>
+        </div>
+      </div>
+
+      <!-- Rol -->
+      <div>
+        <label class="block text-sm font-medium text-gray-700 mb-1">Rol *</label>
+        <select
+          v-model="form.rol"
+          class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+        >
+          <option value="vendedor">Vendedor</option>
+          <option value="supervisor">Supervisor</option>
+        </select>
+      </div>
+
+      <!-- Tienda -->
+      <div>
+        <label class="block text-sm font-medium text-gray-700 mb-1">Tienda predeterminada *</label>
+        <select
+          v-model="form.tienda_default_id"
+          class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+          :class="{ 'border-red-400': errores.tienda_default_id }"
+        >
+          <option value="">Seleccionar tienda...</option>
+          <option v-for="t in tiendas" :key="t.id" :value="t.id">{{ t.nombre }}</option>
+        </select>
+        <p v-if="errores.tienda_default_id" class="text-xs text-red-600 mt-1">{{ errores.tienda_default_id[0] ?? errores.tienda_default_id }}</p>
+      </div>
+
+      <!-- Error general -->
+      <p v-if="error" class="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{{ error }}</p>
+
+      <!-- Submit -->
+      <button
+        type="submit"
+        :disabled="submitting"
+        class="w-full bg-blue-600 text-white rounded-lg py-3 text-sm font-semibold hover:bg-blue-700 disabled:opacity-50 transition-colors"
+      >
+        {{ submitting ? 'Creando...' : 'Crear usuario' }}
+      </button>
+    </form>
+  </div>
+</template>
