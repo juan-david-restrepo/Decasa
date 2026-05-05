@@ -3,7 +3,9 @@ import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import api from '@/api'
+import { getVariantes } from '@/api/inventario'
 import { SparklesIcon, XMarkIcon } from '@heroicons/vue/24/solid'
+import { PhotoIcon } from '@heroicons/vue/24/outline'
 
 const router = useRouter()
 const auth   = useAuthStore()
@@ -33,7 +35,7 @@ async function buscarCliente() {
   buscandoCliente.value = true
   try {
     const { data } = await api.get('/clientes', { params: { search: clienteQuery.value } })
-    clienteResultados.value = data
+    clienteResultados.value = data.data ?? []
   } finally {
     buscandoCliente.value = false
   }
@@ -76,17 +78,18 @@ function paso1Valido() {
 }
 
 // ── Paso 2: Productos / Carrito ───────────────────────────────────────────────
-const productoQuery     = ref('')
+const productoQuery      = ref('')
 const productoResultados = ref([])
 const buscandoProducto   = ref(false)
-const items = ref([])
+const items              = ref([])
+const tiendaBusqueda     = ref(auth.usuario?.tienda_default_id ?? '')
 
 async function buscarProducto() {
   if (!productoQuery.value.trim()) return
   buscandoProducto.value = true
   try {
     const { data } = await api.get('/productos', {
-      params: { search: productoQuery.value, tienda_id: tiendaId.value },
+      params: { search: productoQuery.value, tienda_id: tiendaBusqueda.value || tiendaId.value },
     })
     productoResultados.value = data
   } finally {
@@ -98,22 +101,70 @@ function stockLibre(p) {
   return (p.stock_disponible ?? 0) - (p.stock_reservado ?? 0)
 }
 
-function agregarItem(producto) {
-  const existe = items.value.find((i) => i.producto_id === producto.id)
-  if (existe) {
-    existe.cantidad++
+function nombreTiendaBusqueda() {
+  return tiendas.value.find(t => t.id == tiendaBusqueda.value)?.nombre ?? ''
+}
+
+// ── Selector de variante ──────────────────────────────────────────────────────
+const mostrarVariantePicker = ref(false)
+const productoParaVariante  = ref(null)
+const variantesDisponibles  = ref([])
+const cargandoVariantes     = ref(false)
+const varianteSeleccionada  = ref(null)
+
+async function agregarItem(producto) {
+  // Si tiene variantes en la tienda de búsqueda, abrir picker
+  const tiendaConsulta = tiendaBusqueda.value || tiendaId.value
+  if (producto.variantes?.length > 0) {
+    productoParaVariante.value = producto
+    varianteSeleccionada.value = null
+    cargandoVariantes.value    = true
+    mostrarVariantePicker.value = true
+    try {
+      const { data } = await getVariantes(producto.id, tiendaConsulta)
+      variantesDisponibles.value = data
+    } finally {
+      cargandoVariantes.value = false
+    }
     return
   }
+  _pushItem(producto, null)
+}
+
+function confirmarVariante() {
+  _pushItem(productoParaVariante.value, varianteSeleccionada.value)
+  mostrarVariantePicker.value = false
+}
+
+function _pushItem(producto, variante) {
+  const esOtraTienda = tiendaBusqueda.value && tiendaBusqueda.value != tiendaId.value
+  const stockL = variante
+    ? (variante.stock_libre ?? 0)
+    : stockLibre(producto)
+
+  const varianteLabel = variante
+    ? `${variante.marca_tela} · ${variante.nombre_color}`
+    : null
+
+  const existe = items.value.find((i) =>
+    i.producto_id === producto.id && i.variante_id === (variante?.id ?? null)
+  )
+  if (existe) { existe.cantidad++; return }
+
   items.value.push({
-    producto_id:           producto.id,
-    nombre:                producto.nombre,
-    categoria:             producto.categoria,
-    stock_libre:           stockLibre(producto),
-    personalizable:        producto.personalizable ?? false,
-    cantidad:              1,
-    precio_unitario:       producto.precio_base ?? 0,
-    es_personalizado:      false,
-    specs_descripcion:     '',
+    producto_id:      producto.id,
+    variante_id:      variante?.id ?? null,
+    tienda_origen_id: esOtraTienda ? (tiendaBusqueda.value ?? null) : null,
+    nombre:           producto.nombre,
+    categoria:        producto.categoria,
+    variante_label:   varianteLabel,
+    stock_libre:      stockL,
+    personalizable:   producto.personalizable ?? false,
+    cantidad:         1,
+    precio_unitario:  producto.precio_base ?? 0,
+    es_personalizado: false,
+    specs_descripcion: '',
+    tienda_origen:    esOtraTienda ? nombreTiendaBusqueda() : null,
   })
   productoResultados.value = []
   productoQuery.value = ''
@@ -131,6 +182,18 @@ const anticipo_referencia  = ref('')
 const notas                = ref('')
 const submitting           = ref(false)
 const errSubmit            = ref('')
+
+const facturaFotoFile      = ref(null)
+const facturaFotoUrl       = ref('')
+const subiendoFactura      = ref(false)
+
+const fotoModal    = ref(false)
+const fotoProducto = ref(null)
+
+function verFoto(p) {
+  fotoProducto.value = p
+  fotoModal.value = true
+}
 
 const metodosOpts = [
   { value: 'efectivo',      label: 'Efectivo' },
@@ -156,6 +219,19 @@ async function submit() {
   errSubmit.value = ''
   submitting.value = true
   try {
+    // Subir foto de factura si se seleccionó
+    if (facturaFotoFile.value && !facturaFotoUrl.value) {
+      subiendoFactura.value = true
+      const fd = new FormData()
+      fd.append('foto', facturaFotoFile.value)
+      fd.append('folder', 'facturas')
+      const { data: uploadData } = await api.post('/upload/foto', fd, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      })
+      facturaFotoUrl.value = uploadData.url
+      subiendoFactura.value = false
+    }
+
     const payload = {
       cliente_id:           clienteSeleccionado.value.id,
       tienda_id:            tiendaId.value,
@@ -165,8 +241,11 @@ async function submit() {
       anticipo_metodo:      anticipo_metodo.value,
       anticipo_referencia:  anticipo_referencia.value || undefined,
       notas:                notas.value || undefined,
+      factura_foto_url:     facturaFotoUrl.value || undefined,
       items: items.value.map((i) => ({
         producto_id:           i.producto_id,
+        variante_id:           i.variante_id   || undefined,
+        tienda_origen_id:      i.tienda_origen_id || undefined,
         cantidad:              i.cantidad,
         precio_unitario:       i.precio_unitario,
         es_personalizado:      i.es_personalizado,
@@ -182,7 +261,21 @@ async function submit() {
     errSubmit.value = e.response?.data?.message ?? 'Error al crear la orden'
   } finally {
     submitting.value = false
+    subiendoFactura.value = false
   }
+}
+
+function onFacturaFotoChange(e) {
+  const file = e.target.files[0]
+  if (file) {
+    facturaFotoFile.value = file
+    facturaFotoUrl.value = '' // Reset URL para forzar nueva subida
+  }
+}
+
+function removeFacturaFoto() {
+  facturaFotoFile.value = null
+  facturaFotoUrl.value = ''
 }
 </script>
 
@@ -316,6 +409,19 @@ async function submit() {
     <!-- ═══════════════════════════════════════════════════════ PASO 2 ══ -->
     <template v-else-if="step === 2">
 
+      <!-- Selector tienda de búsqueda -->
+      <div>
+        <label class="label">Buscar en tienda</label>
+        <select v-model="tiendaBusqueda" @change="productoResultados = []" class="input text-sm">
+          <option v-for="t in tiendas" :key="t.id" :value="t.id">
+            {{ t.nombre }}{{ t.id == tiendaId ? ' (tu tienda)' : '' }}
+          </option>
+        </select>
+        <p v-if="tiendaBusqueda && tiendaBusqueda != tiendaId" class="mt-1 text-xs text-amber-600 font-medium">
+          Consultando stock de otra tienda — la orden se registra en {{ tiendas.find(t => t.id == tiendaId)?.nombre }}
+        </p>
+      </div>
+
       <!-- Buscador de productos -->
       <div class="flex gap-2">
         <input
@@ -334,11 +440,30 @@ async function submit() {
         <li
           v-for="p in productoResultados"
           :key="p.id"
-          class="bg-white rounded-xl shadow-sm p-3 flex justify-between items-center"
+          class="bg-white rounded-xl shadow-sm p-3 flex items-center gap-3"
         >
+          <!-- Thumbnail -->
+          <button
+            @click="p.foto_url && verFoto(p)"
+            :class="[
+              'flex-shrink-0 w-12 h-12 rounded-lg overflow-hidden bg-gray-100 flex items-center justify-center',
+              p.foto_url ? 'cursor-pointer hover:opacity-75 transition-opacity' : 'cursor-default'
+            ]"
+            :title="p.foto_url ? 'Ver foto' : 'Sin foto'"
+          >
+            <img v-if="p.foto_url" :src="p.foto_url" :alt="p.nombre" class="w-full h-full object-cover" />
+            <PhotoIcon v-else class="w-6 h-6 text-gray-300" />
+          </button>
+
           <div class="flex-1 min-w-0">
             <p class="font-medium text-sm text-gray-800 truncate">{{ p.nombre }}</p>
-            <p class="text-xs text-gray-400">{{ p.categoria }}</p>
+            <p class="text-xs text-gray-400">
+              {{ p.categoria }}
+              <span v-if="tiendaBusqueda && tiendaBusqueda != tiendaId"
+                class="ml-1.5 bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded-full font-medium">
+                📍 {{ nombreTiendaBusqueda() }}
+              </span>
+            </p>
             <p class="text-xs mt-0.5"
               :class="stockLibre(p) > 0 ? 'text-green-600' : 'text-orange-500'"
             >
@@ -346,7 +471,7 @@ async function submit() {
               <span v-if="p.personalizable" class="ml-2 text-purple-500 flex items-center gap-0.5 inline-flex"><SparklesIcon class="w-3 h-3" /> personalizable</span>
             </p>
           </div>
-          <div class="ml-3 flex flex-col items-end gap-1">
+          <div class="flex flex-col items-end gap-1">
             <span class="text-sm font-semibold text-gray-700">
               ${{ Number(p.precio_base).toLocaleString('es-CO') }}
             </span>
@@ -371,7 +496,19 @@ async function submit() {
           <div class="flex justify-between items-start">
             <div class="flex-1 min-w-0">
               <p class="font-medium text-sm text-gray-800 truncate">{{ item.nombre }}</p>
-              <p class="text-xs text-gray-400">{{ item.categoria }}</p>
+              <div class="flex flex-wrap items-center gap-1 mt-0.5">
+                <span v-if="item.variante_label"
+                  class="bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded-full text-xs font-medium">
+                  🧵 {{ item.variante_label }}
+                </span>
+                <span v-if="item.tienda_origen"
+                  class="bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded-full font-medium text-xs">
+                  📍 {{ item.tienda_origen }}
+                </span>
+                <span v-if="!item.variante_label && !item.tienda_origen" class="text-xs text-gray-400">
+                  {{ item.categoria }}
+                </span>
+              </div>
             </div>
             <button @click="quitarItem(idx)" class="text-red-400 hover:text-red-600 ml-2"><XMarkIcon class="w-5 h-5" /></button>
           </div>
@@ -514,18 +651,140 @@ async function submit() {
         <textarea v-model="notas" rows="2" class="input resize-none" placeholder="Observaciones de la orden..." />
       </div>
 
+      <!-- Foto de factura -->
+      <div>
+        <label class="label">Foto de la factura (opcional)</label>
+        <div v-if="facturaFotoFile" class="mb-2">
+          <div class="relative inline-block">
+            <img
+              :src="facturaFotoUrl ? facturaFotoUrl : (facturaFotoFile ? URL.createObjectURL(facturaFotoFile) : '')"
+              alt="Factura"
+              class="w-full max-w-xs rounded-lg border border-gray-200 object-cover max-h-48"
+            />
+            <button
+              @click="removeFacturaFoto"
+              class="absolute -top-2 -right-2 bg-red-500 text-white rounded-full p-1"
+            >
+              <XMarkIcon class="w-4 h-4" />
+            </button>
+          </div>
+          <p v-if="subiendoFactura" class="text-xs text-blue-600 mt-1">Subiendo imagen...</p>
+        </div>
+        <input
+          v-else
+          type="file"
+          accept="image/*"
+          @change="onFacturaFotoChange"
+          class="input cursor-pointer"
+        />
+      </div>
+
       <p v-if="errSubmit" class="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{{ errSubmit }}</p>
 
-      <button
-        @click="submit"
-        :disabled="submitting || anticipo_monto < minimoAnticipo"
-        class="btn-primary w-full text-base py-3"
-      >
-        {{ submitting ? 'Guardando...' : 'Crear orden' }}
-      </button>
+       <button
+         @click="submit"
+         :disabled="submitting || subiendoFactura || anticipo_monto < minimoAnticipo"
+         class="btn-primary w-full text-base py-3"
+       >
+         {{ subiendoFactura ? 'Subiendo foto...' : submitting ? 'Guardando...' : 'Crear orden' }}
+       </button>
     </template>
 
   </div>
+
+  <!-- Modal picker de variante -->
+  <Transition name="fade">
+    <div v-if="mostrarVariantePicker" class="fixed inset-0 z-[70] flex items-end sm:items-center justify-center" @click.self="mostrarVariantePicker = false">
+      <div class="absolute inset-0 bg-black/50" @click="mostrarVariantePicker = false" />
+      <div class="relative bg-white rounded-t-2xl sm:rounded-2xl w-full sm:max-w-sm p-5 space-y-4">
+        <div class="flex items-center justify-between">
+          <div>
+            <h3 class="text-base font-bold text-gray-800">Seleccionar variante</h3>
+            <p class="text-xs text-gray-500 mt-0.5 truncate">{{ productoParaVariante?.nombre }}</p>
+          </div>
+          <button @click="mostrarVariantePicker = false" class="text-gray-400 text-2xl leading-none">&times;</button>
+        </div>
+
+        <div v-if="cargandoVariantes" class="text-center py-6 text-gray-400 text-sm">Cargando variantes...</div>
+
+        <div v-else class="space-y-2">
+          <!-- Opción sin variante -->
+          <button
+            @click="varianteSeleccionada = null"
+            :class="['w-full text-left px-3 py-2.5 rounded-xl border text-sm transition-colors',
+              varianteSeleccionada === null
+                ? 'border-blue-500 bg-blue-50 text-blue-700 font-medium'
+                : 'border-gray-200 bg-white text-gray-700 hover:bg-gray-50']"
+          >
+            Sin especificar tela
+            <span class="text-xs text-gray-400 ml-1">(stock base: {{ stockLibre(productoParaVariante) }})</span>
+          </button>
+
+          <!-- Variantes disponibles -->
+          <button
+            v-for="v in variantesDisponibles"
+            :key="v.id"
+            @click="varianteSeleccionada = v"
+            :disabled="!v.personalizable && v.stock_libre <= 0"
+            :class="['w-full text-left px-3 py-2.5 rounded-xl border text-sm transition-colors',
+              varianteSeleccionada?.id === v.id
+                ? 'border-blue-500 bg-blue-50 text-blue-700 font-medium'
+                : v.stock_libre > 0
+                  ? 'border-gray-200 bg-white text-gray-700 hover:bg-gray-50'
+                  : 'border-gray-100 bg-gray-50 text-gray-300 cursor-not-allowed']"
+          >
+            <span class="font-medium">{{ v.marca_tela }}</span>
+            <span class="text-gray-400 mx-1">·</span>
+            {{ v.nombre_color }}
+            <span :class="['text-xs ml-2 font-semibold', v.stock_libre > 0 ? 'text-green-600' : 'text-red-400']">
+              {{ v.stock_libre > 0 ? `${v.stock_libre} disponible${v.stock_libre > 1 ? 's' : ''}` : 'Sin stock' }}
+            </span>
+          </button>
+
+          <p v-if="!variantesDisponibles.length" class="text-xs text-gray-400 text-center py-2">
+            No hay variantes registradas para esta tienda.
+          </p>
+        </div>
+
+        <button
+          @click="confirmarVariante"
+          class="w-full bg-blue-600 text-white rounded-xl py-2.5 text-sm font-semibold hover:bg-blue-700"
+        >
+          Agregar al carrito
+        </button>
+      </div>
+    </div>
+  </Transition>
+
+  <!-- Lightbox foto producto -->
+  <Transition name="fade">
+    <div
+      v-if="fotoModal"
+      class="fixed inset-0 z-[60] flex items-center justify-center p-6"
+      @click.self="fotoModal = false"
+    >
+      <div class="absolute inset-0 bg-black/85" @click="fotoModal = false" />
+      <div class="relative w-full max-w-sm">
+        <button
+          @click="fotoModal = false"
+          class="absolute -top-3 -right-3 z-10 bg-white rounded-full p-1.5 shadow-lg"
+        >
+          <XMarkIcon class="w-5 h-5 text-gray-700" />
+        </button>
+        <div class="bg-white rounded-2xl overflow-hidden shadow-2xl">
+          <img
+            :src="fotoProducto?.foto_url"
+            :alt="fotoProducto?.nombre"
+            class="w-full object-contain max-h-72"
+          />
+          <div class="px-4 py-3 border-t border-gray-100">
+            <p class="text-sm font-semibold text-gray-800 text-center">{{ fotoProducto?.nombre }}</p>
+            <p v-if="fotoProducto?.categoria" class="text-xs text-gray-400 text-center mt-0.5">{{ fotoProducto?.categoria }}</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </Transition>
 </template>
 
 <style scoped>
@@ -575,5 +834,13 @@ async function submit() {
 }
 .btn-secondary:hover {
   background: #e5e7eb;
+}
+.fade-enter-active,
+.fade-leave-active {
+  transition: opacity 0.2s ease;
+}
+.fade-enter-from,
+.fade-leave-to {
+  opacity: 0;
 }
 </style>

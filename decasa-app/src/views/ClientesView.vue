@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onUnmounted, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import {
   MagnifyingGlassIcon,
@@ -15,7 +15,13 @@ const router = useRouter()
 
 const clientes = ref([])
 const loading  = ref(true)
+const loadingMore = ref(false)
+const hasMore = ref(true)
+const currentPage = ref(1)
 const busqueda = ref('')
+
+const sentinel = ref(null)
+let observer = null
 
 const mostrarCrear = ref(false)
 const formError = ref('')
@@ -37,14 +43,60 @@ const canalesOpts = [
   { value: 'otro', label: 'Otro' },
 ]
 
-async function buscar() {
-  loading.value = true
+async function fetchClientes(page = 1, append = false) {
+  if (page === 1) {
+    loading.value = true
+  } else {
+    loadingMore.value = true
+  }
+
   try {
-    const { data } = await getClientes(busqueda.value)
-    clientes.value = data
+    const params = { page }
+    if (busqueda.value) params.search = busqueda.value
+
+    const { data } = await getClientes(params)
+
+    const list = data.data ?? []
+    if (append) {
+      clientes.value = [...clientes.value, ...list]
+    } else {
+      clientes.value = list
+    }
+
+    hasMore.value = data.current_page < data.last_page
+    currentPage.value = data.current_page
+  } catch (e) {
+    if (page === 1) clientes.value = []
   } finally {
     loading.value = false
+    loadingMore.value = false
   }
+}
+
+function buscar(reset = true) {
+  if (reset) {
+    currentPage.value = 1
+    fetchClientes(1, false)
+  }
+}
+
+function setupObserver() {
+  if (observer) observer.disconnect()
+
+  observer = new IntersectionObserver((entries) => {
+    if (entries[0].isIntersecting && hasMore.value && !loadingMore.value) {
+      loadMore()
+    }
+  }, { rootMargin: '200px' })
+
+  nextTick(() => {
+    if (sentinel.value) observer.observe(sentinel.value)
+  })
+}
+
+async function loadMore() {
+  if (loadingMore.value || !hasMore.value) return
+  await fetchClientes(currentPage.value + 1, true)
 }
 
 function goToCliente(id) {
@@ -67,7 +119,8 @@ async function guardar() {
   try {
     await createCliente(nuevo.value)
     mostrarCrear.value = false
-    await buscar()
+    await fetchClientes(1, false)
+    setupObserver()
   } catch (e) {
     const msgs = e.response?.data?.message
     formError.value = typeof msgs === 'string' ? msgs : Object.values(msgs).flat().join(' ')
@@ -76,7 +129,14 @@ async function guardar() {
   }
 }
 
-onMounted(buscar)
+onMounted(() => {
+  fetchClientes(1, false)
+  setupObserver()
+})
+
+onUnmounted(() => {
+  if (observer) observer.disconnect()
+})
 </script>
 
 <template>
@@ -98,7 +158,7 @@ onMounted(buscar)
       <MagnifyingGlassIcon class="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
       <input
         v-model="busqueda"
-        @keyup.enter="buscar"
+        @keyup.enter="buscar(true)"
         placeholder="Buscar por nombre, cédula o teléfono..."
         class="w-full rounded-lg border border-gray-300 pl-10 pr-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
       />
@@ -109,39 +169,42 @@ onMounted(buscar)
 
     <!-- Empty -->
     <EmptyState
-      v-else-if="busqueda && clientes.length === 0"
-      message="No se encontraron clientes."
-    />
-
-    <EmptyState
-      v-else-if="!busqueda && clientes.length === 0"
-      message="No hay clientes registrados."
+      v-else-if="!loading && clientes.length === 0"
+      :message="busqueda ? 'No se encontraron clientes.' : 'No hay clientes registrados.'"
     />
 
     <!-- Lista -->
-    <ul v-else class="space-y-2">
-      <li
-        v-for="c in clientes"
-        :key="c.id"
-        @click="goToCliente(c.id)"
-        class="bg-white rounded-xl shadow-sm p-4 flex items-center gap-3 cursor-pointer hover:bg-blue-50 transition-colors active:bg-blue-100"
-      >
-        <div class="flex-1 min-w-0">
-          <p class="font-medium text-gray-800 truncate">{{ c.nombre }}</p>
-          <div class="flex items-center gap-3 mt-1">
-            <span v-if="c.cedula" class="flex items-center gap-1 text-xs text-gray-400">
-              <IdentificationIcon class="w-3.5 h-3.5" />
-              {{ c.cedula }}
-            </span>
-            <span v-if="c.telefono" class="flex items-center gap-1 text-xs text-gray-400">
-              <PhoneIcon class="w-3.5 h-3.5" />
-              {{ c.telefono }}
-            </span>
+    <template v-else>
+      <ul class="space-y-2">
+        <li
+          v-for="c in clientes"
+          :key="c.id"
+          @click="goToCliente(c.id)"
+          class="bg-white rounded-xl shadow-sm p-4 flex items-center gap-3 cursor-pointer hover:bg-blue-50 transition-colors active:bg-blue-100"
+        >
+          <div class="flex-1 min-w-0">
+            <p class="font-medium text-gray-800 truncate">{{ c.nombre }}</p>
+            <div class="flex items-center gap-3 mt-1">
+              <span v-if="c.cedula" class="flex items-center gap-1 text-xs text-gray-400">
+                <IdentificationIcon class="w-3.5 h-3.5" />
+                {{ c.cedula }}
+              </span>
+              <span v-if="c.telefono" class="flex items-center gap-1 text-xs text-gray-400">
+                <PhoneIcon class="w-3.5 h-3.5" />
+                {{ c.telefono }}
+              </span>
+            </div>
           </div>
-        </div>
-        <ChevronRightIcon class="w-5 h-5 text-gray-300 flex-shrink-0" />
-      </li>
-    </ul>
+          <ChevronRightIcon class="w-5 h-5 text-gray-300 flex-shrink-0" />
+        </li>
+      </ul>
+
+      <!-- Sentinel para scroll infinito -->
+      <div ref="sentinel" class="py-4 text-center">
+        <div v-if="loadingMore" class="text-sm text-gray-400">Cargando más...</div>
+        <div v-else-if="!hasMore && clientes.length > 0" class="text-xs text-gray-300">No hay más clientes.</div>
+      </div>
+    </template>
 
     <!-- Modal crear cliente -->
     <Transition name="fade">

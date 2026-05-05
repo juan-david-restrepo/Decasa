@@ -8,9 +8,9 @@ use Illuminate\Http\Request;
 class ProduccionController extends Controller
 {
     /**
-     * GET /api/produccion?estado=en_proceso&tienda_id=1
+     * GET /api/produccion?estado=en_proceso&tienda_id=1&page=1
      *
-     * Lista pedidos personalizados en producción.
+     * Lista pedidos personalizados en producción con paginación.
      * Incluye días restantes (negativo = retraso).
      */
     public function index(Request $request)
@@ -37,10 +37,18 @@ class ProduccionController extends Controller
             $query->whereHas('ordenItem.orden', fn($q) => $q->where('tienda_id', $tiendaId));
         }
 
+        if ($search = $request->query('search')) {
+            $term = "%{$search}%";
+            $query->where(function ($q) use ($term) {
+                $q->whereHas('ordenItem.producto', fn($p) => $p->where('nombre', 'like', $term))
+                  ->orWhereHas('ordenItem.orden.cliente', fn($c) => $c->where('nombre', 'like', $term));
+            });
+        }
+
         $producciones = $query
             ->orderBy('fecha_compromiso')
-            ->get()
-            ->map(function ($p) {
+            ->paginate(20)
+            ->through(function ($p) {
                 $hoy = now()->startOfDay();
                 $compromiso = \Carbon\Carbon::parse($p->fecha_compromiso)->startOfDay();
                 $p->dias_restantes = $hoy->diffInDays($compromiso, false);

@@ -10,8 +10,8 @@ use Illuminate\Support\Facades\DB;
 class ClienteController extends Controller
 {
     /**
-     * GET /api/clientes?search=juan
-     * Búsqueda por nombre o cédula.
+     * GET /api/clientes?search=juan&page=1
+     * Búsqueda por nombre o cédula con paginación.
      */
     public function index(Request $request)
     {
@@ -26,7 +26,7 @@ class ClienteController extends Controller
             });
         }
 
-        $clientes = $query->orderBy('nombre')->limit(50)->get();
+        $clientes = $query->orderBy('nombre')->paginate(20);
 
         return response()->json($clientes);
     }

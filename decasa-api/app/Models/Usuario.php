@@ -21,6 +21,7 @@ class Usuario extends Authenticatable
         'rol',
         'tienda_default_id',
         'activo',
+        'created_at',
     ];
 
     protected $hidden = ['password'];

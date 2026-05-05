@@ -17,6 +17,7 @@ class Orden extends Model
         'valor_total',
         'anticipo_pct',
         'notas',
+        'factura_foto_url',
     ];
 
     protected function casts(): array

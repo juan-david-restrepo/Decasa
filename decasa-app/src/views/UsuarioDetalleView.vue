@@ -10,7 +10,8 @@ import {
   KeyIcon,
   PencilIcon,
 } from '@heroicons/vue/24/outline'
-import { getUsuario, toggleActivo, resetPassword } from '@/api/usuarios'
+import { getUsuario, toggleActivo, resetPassword, updateUsuario } from '@/api/usuarios'
+import { getTiendas } from '@/api/ordenes'
 import EmptyState from '@/components/common/EmptyState.vue'
 import MoneyDisplay from '@/components/common/MoneyDisplay.vue'
 
@@ -24,6 +25,8 @@ const showResetModal = ref(false)
 const showEditModal = ref(false)
 const actionLoading = ref(false)
 const actionError = ref('')
+const tiendas = ref([])
+const editLoading = ref(false)
 
 // Reset password
 const nuevaPassword = ref('')
@@ -103,13 +106,51 @@ function openEditModal() {
   showEditModal.value = true
 }
 
+async function submitEdit() {
+  actionError.value = ''
+  if (!editForm.value.nombre.trim()) {
+    actionError.value = 'El nombre es obligatorio.'
+    return
+  }
+  if (!editForm.value.email.trim()) {
+    actionError.value = 'El email es obligatorio.'
+    return
+  }
+  editLoading.value = true
+  try {
+    await updateUsuario(usuario.value.id, {
+      nombre: editForm.value.nombre.trim(),
+      email: editForm.value.email.trim(),
+      rol: editForm.value.rol,
+      tienda_default_id: editForm.value.tienda_default_id,
+    })
+    showEditModal.value = false
+    await cargarUsuario()
+  } catch (e) {
+    const data = e.response?.data
+    if (data?.errors) {
+      actionError.value = Object.values(data.errors).flat().join(' ')
+    } else {
+      actionError.value = data?.message ?? 'Error al actualizar el usuario.'
+    }
+  } finally {
+    editLoading.value = false
+  }
+}
+
 function formatFecha(dateStr) {
   if (!dateStr) return ''
   const d = new Date(dateStr)
   return d.toLocaleDateString('es-CO', { day: '2-digit', month: 'short', year: 'numeric' })
 }
 
-onMounted(cargarUsuario)
+onMounted(async () => {
+  cargarUsuario()
+  try {
+    const { data } = await getTiendas()
+    tiendas.value = data
+  } catch {}
+})
 </script>
 
 <template>
@@ -150,11 +191,11 @@ onMounted(cargarUsuario)
             <p class="font-medium text-gray-800">{{ usuario.email }}</p>
           </div>
         </div>
-        <div v-if="usuario.tienda" class="flex items-center gap-3">
+        <div v-if="usuario.tienda_default" class="flex items-center gap-3">
           <MapPinIcon class="w-5 h-5 text-gray-400 flex-shrink-0" />
           <div>
             <p class="text-xs text-gray-400">Tienda predeterminada</p>
-            <p class="font-medium text-gray-800">{{ usuario.tienda.nombre }}</p>
+            <p class="font-medium text-gray-800">{{ usuario.tienda_default.nombre }}</p>
           </div>
         </div>
         <div class="flex items-center gap-3">
@@ -314,13 +355,15 @@ onMounted(cargarUsuario)
             <label class="block text-sm font-medium text-gray-700 mb-1">Tienda</label>
             <select v-model="editForm.tienda_default_id" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
               <option value="">Seleccionar...</option>
-              <option v-for="t in usuario?.tienda ? [usuario.tienda] : []" :key="t.id" :value="t.id">{{ t.nombre }}</option>
+              <option v-for="t in tiendas" :key="t.id" :value="t.id">{{ t.nombre }}</option>
             </select>
           </div>
           <p v-if="actionError" class="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{{ actionError }}</p>
           <div class="flex gap-3">
             <button @click="showEditModal = false" class="flex-1 bg-gray-100 text-gray-700 rounded-lg py-2.5 text-sm font-semibold">Cancelar</button>
-            <button @click="showEditModal = false" class="flex-1 bg-blue-600 text-white rounded-lg py-2.5 text-sm font-semibold hover:bg-blue-700">Guardar</button>
+            <button @click="submitEdit" :disabled="editLoading" class="flex-1 bg-blue-600 text-white rounded-lg py-2.5 text-sm font-semibold hover:bg-blue-700 disabled:opacity-50">
+              {{ editLoading ? 'Guardando...' : 'Guardar' }}
+            </button>
           </div>
         </div>
       </div>

@@ -8,8 +8,10 @@ import {
   PlusIcon,
   PencilIcon,
   ArchiveBoxIcon,
+  PhotoIcon,
+  XMarkIcon,
 } from '@heroicons/vue/24/outline'
-import { getInventario, addStock } from '@/api/inventario'
+import { getInventario, addStock, getVariantes, crearVariante, addStockVariante } from '@/api/inventario'
 import { getTiendas } from '@/api/ordenes'
 import MoneyDisplay from '@/components/common/MoneyDisplay.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
@@ -38,7 +40,124 @@ const gestionLoading = ref(false)
 const stockError = ref('')
 const stockLoading = ref(false)
 
+const fotoModal = ref(false)
+const fotoProducto = ref(null)
+
+function verFoto(producto) {
+  fotoProducto.value = producto
+  fotoModal.value = true
+}
+
+// ── Agregar producto ──────────────────────────────────────────────────────────
+const mostrarAgregarProducto = ref(false)
+const creandoProducto = ref(false)
+const subiendoFoto = ref(false)
+const errCrearProducto = ref('')
+const tiendasFormSeleccionadas = ref([])
+
+const fotoFile = ref(null)
+const fotoPreviewUrl = ref('')
+const fotoInput = ref(null)
+
+const formProducto = ref({
+  nombre: '',
+  categoria: '',
+  precio_base: '',
+  personalizable: false,
+  descripcion: '',
+  medidas: '',
+  material: '',
+})
+
+const todasTiendasSeleccionadas = computed(
+  () => tiendas.value.length > 0 && tiendasFormSeleccionadas.value.length === tiendas.value.length
+)
+
+function toggleTodasTiendas() {
+  if (todasTiendasSeleccionadas.value) {
+    tiendasFormSeleccionadas.value = []
+  } else {
+    tiendasFormSeleccionadas.value = tiendas.value.map((t) => t.id)
+  }
+}
+
+function onFotoChange(e) {
+  const file = e.target.files[0]
+  if (!file) return
+  if (fotoPreviewUrl.value) URL.revokeObjectURL(fotoPreviewUrl.value)
+  fotoFile.value = file
+  fotoPreviewUrl.value = URL.createObjectURL(file)
+}
+
+function quitarFoto() {
+  if (fotoPreviewUrl.value) URL.revokeObjectURL(fotoPreviewUrl.value)
+  fotoFile.value = null
+  fotoPreviewUrl.value = ''
+  if (fotoInput.value) fotoInput.value.value = ''
+}
+
+function abrirAgregarProducto() {
+  formProducto.value = { nombre: '', categoria: '', precio_base: '', personalizable: false, descripcion: '', medidas: '', material: '' }
+  tiendasFormSeleccionadas.value = auth.isSupervisor ? tiendas.value.map((t) => t.id) : []
+  quitarFoto()
+  errCrearProducto.value = ''
+  mostrarAgregarProducto.value = true
+}
+
+async function crearProducto() {
+  errCrearProducto.value = ''
+  if (!formProducto.value.nombre.trim()) {
+    errCrearProducto.value = 'El nombre es obligatorio.'
+    return
+  }
+  if (!formProducto.value.precio_base || Number(formProducto.value.precio_base) < 0) {
+    errCrearProducto.value = 'El precio base es obligatorio.'
+    return
+  }
+  if (auth.isSupervisor && tiendasFormSeleccionadas.value.length === 0) {
+    errCrearProducto.value = 'Selecciona al menos una tienda.'
+    return
+  }
+
+  creandoProducto.value = true
+  try {
+    // 1. Subir foto a Cloudinary si el usuario seleccionó una
+    let foto_url = undefined
+    if (fotoFile.value) {
+      subiendoFoto.value = true
+      const fd = new FormData()
+      fd.append('foto', fotoFile.value)
+      const { data } = await api.post('/upload/foto', fd, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      })
+      foto_url = data.url
+      subiendoFoto.value = false
+    }
+
+    // 2. Crear el producto con la URL obtenida
+    const payload = {
+      ...formProducto.value,
+      precio_base: Number(formProducto.value.precio_base),
+      ...(foto_url ? { foto_url } : {}),
+    }
+    if (auth.isSupervisor) payload.tiendas = tiendasFormSeleccionadas.value
+    await api.post('/productos', payload)
+    mostrarAgregarProducto.value = false
+    if (tiendaId.value) await cargarInventario()
+  } catch (e) {
+    subiendoFoto.value = false
+    errCrearProducto.value = e.response?.data?.message ?? 'Error al crear el producto.'
+  } finally {
+    creandoProducto.value = false
+  }
+}
+
 const POR_PAGINA = 20
+
+const esVistaGlobal   = computed(() => tiendaId.value === 'todas')
+const puedeGestionar  = computed(() =>
+  auth.isSupervisor || String(tiendaId.value) === String(auth.usuario?.tienda_default_id)
+)
 
 const paginaVisible = computed(() => {
   return inventario.value.slice(0, pagina.value * POR_PAGINA)
@@ -126,7 +245,7 @@ async function guardarStock() {
   try {
     await addStock({
       producto_id: itemGestionar.value.producto_id,
-      tienda_id: tiendaId.value,
+      tienda_id: esVistaGlobal.value ? 'todas' : tiendaId.value,
       cantidad: nuevoStock.value,
       motivo: stockMotivo.value || undefined,
     })
@@ -136,6 +255,99 @@ async function guardarStock() {
     stockError.value = e.response?.data?.message ?? 'Error al agregar stock.'
   } finally {
     stockLoading.value = false
+  }
+}
+
+// ── Variantes ─────────────────────────────────────────────────────────────────
+const variantesAbiertas  = ref({})   // { producto_id: bool }
+const variantesData      = ref({})   // { producto_id: Variante[] }
+const varianteCargando   = ref({})   // { producto_id: bool }
+
+const mostrarStockVariante   = ref(false)
+const varianteStockItem      = ref(null)   // { variante, productoId }
+const varianteStockCantidad  = ref(1)
+const varianteStockMotivo    = ref('')
+const varianteStockLoading   = ref(false)
+const varianteStockError     = ref('')
+
+const mostrarNuevaVariante  = ref(false)
+const varianteProdId        = ref(null)
+const formVariante          = ref({ marca_tela: '', nombre_color: '' })
+const varianteCreandoLoad   = ref(false)
+const varianteCreandoError  = ref('')
+
+async function toggleVariantes(item) {
+  const pid = item.producto_id
+  variantesAbiertas.value[pid] = !variantesAbiertas.value[pid]
+  if (variantesAbiertas.value[pid] && !variantesData.value[pid]) {
+    varianteCargando.value[pid] = true
+    try {
+      const { data } = await getVariantes(pid, esVistaGlobal.value ? null : tiendaId.value)
+      variantesData.value[pid] = data
+    } finally {
+      varianteCargando.value[pid] = false
+    }
+  }
+}
+
+function abrirStockVariante(variante, item) {
+  varianteStockItem.value   = { variante, productoId: item.producto_id }
+  varianteStockCantidad.value = 1
+  varianteStockMotivo.value  = ''
+  varianteStockError.value   = ''
+  mostrarStockVariante.value = true
+}
+
+async function guardarStockVariante() {
+  varianteStockError.value  = ''
+  if (varianteStockCantidad.value < 1) {
+    varianteStockError.value = 'Ingresa una cantidad válida.'
+    return
+  }
+  varianteStockLoading.value = true
+  try {
+    await addStockVariante({
+      variante_id: varianteStockItem.value.variante.id,
+      tienda_id:   tiendaId.value,
+      cantidad:    varianteStockCantidad.value,
+      motivo:      varianteStockMotivo.value || undefined,
+    })
+    mostrarStockVariante.value = false
+    // Recargar variantes del producto
+    const pid = varianteStockItem.value.productoId
+    const { data } = await getVariantes(pid, tiendaId.value)
+    variantesData.value[pid] = data
+  } catch (e) {
+    varianteStockError.value = e.response?.data?.message ?? 'Error al agregar stock.'
+  } finally {
+    varianteStockLoading.value = false
+  }
+}
+
+function abrirNuevaVariante(item) {
+  varianteProdId.value       = item.producto_id
+  formVariante.value         = { marca_tela: '', nombre_color: '' }
+  varianteCreandoError.value = ''
+  mostrarNuevaVariante.value = true
+}
+
+async function guardarNuevaVariante() {
+  varianteCreandoError.value = ''
+  if (!formVariante.value.marca_tela || !formVariante.value.nombre_color) {
+    varianteCreandoError.value = 'Completa marca y color.'
+    return
+  }
+  varianteCreandoLoad.value = true
+  try {
+    await crearVariante(varianteProdId.value, formVariante.value)
+    mostrarNuevaVariante.value = false
+    // Recargar variantes
+    const { data } = await getVariantes(varianteProdId.value, tiendaId.value)
+    variantesData.value[varianteProdId.value] = data
+  } catch (e) {
+    varianteCreandoError.value = e.response?.data?.message ?? 'Error al crear variante.'
+  } finally {
+    varianteCreandoLoad.value = false
   }
 }
 
@@ -154,6 +366,13 @@ onMounted(async () => {
     <!-- Header -->
     <div class="flex items-center gap-2">
       <h2 class="text-lg font-bold text-gray-800 flex-1">Inventario</h2>
+      <button
+        @click="abrirAgregarProducto"
+        class="flex items-center gap-1.5 bg-blue-600 text-white text-sm font-semibold px-3 py-2 rounded-lg hover:bg-blue-700 transition-colors"
+      >
+        <PlusIcon class="w-4 h-4" />
+        Producto
+      </button>
     </div>
 
     <!-- Selector de tienda -->
@@ -165,6 +384,7 @@ onMounted(async () => {
         class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
       >
         <option value="">Seleccionar tienda...</option>
+        <option value="todas">Todas las tiendas</option>
         <option v-for="t in tiendas" :key="t.id" :value="t.id">{{ t.nombre }}</option>
       </select>
     </div>
@@ -187,13 +407,25 @@ onMounted(async () => {
       icon="ArchiveBoxIcon"
     />
 
+    <!-- Indicador vista global -->
+    <div v-if="esVistaGlobal" class="flex items-center gap-2 bg-blue-50 rounded-lg px-3 py-2">
+      <ArchiveBoxIcon class="w-4 h-4 text-blue-500 flex-shrink-0" />
+      <p class="text-xs text-blue-600 font-medium">Mostrando stock total de todas las tiendas</p>
+    </div>
+
+    <!-- Indicador solo consulta (tienda ajena) -->
+    <div v-else-if="tiendaId && !puedeGestionar" class="flex items-center gap-2 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+      <ExclamationTriangleIcon class="w-4 h-4 text-amber-500 flex-shrink-0" />
+      <p class="text-xs text-amber-700 font-medium">Solo consulta — puedes ver el stock pero no modificarlo</p>
+    </div>
+
     <!-- Loading -->
-    <div v-else-if="loading" class="text-center py-12 text-gray-400">Cargando...</div>
+    <div v-if="tiendaId && loading" class="text-center py-12 text-gray-400">Cargando...</div>
 
     <!-- Empty -->
     <EmptyState
-      v-else-if="inventario.length === 0"
-      message="No hay productos en esta tienda."
+      v-else-if="tiendaId && inventario.length === 0"
+      :message="esVistaGlobal ? 'No hay productos en ninguna tienda.' : 'No hay productos en esta tienda.'"
     />
 
     <!-- Lista -->
@@ -204,14 +436,39 @@ onMounted(async () => {
           :key="item.id"
           class="bg-white rounded-xl shadow-sm p-4 space-y-2"
         >
-          <div class="flex justify-between items-start">
+          <div class="flex justify-between items-start gap-2">
+            <!-- Thumbnail foto -->
+            <button
+              @click="item.producto?.foto_url && verFoto(item.producto)"
+              :class="[
+                'flex-shrink-0 w-12 h-12 rounded-lg overflow-hidden bg-gray-100 flex items-center justify-center',
+                item.producto?.foto_url ? 'cursor-pointer hover:opacity-75 transition-opacity' : 'cursor-default'
+              ]"
+              :title="item.producto?.foto_url ? 'Ver foto' : 'Sin foto'"
+            >
+              <img
+                v-if="item.producto?.foto_url"
+                :src="item.producto.foto_url"
+                :alt="item.producto.nombre"
+                class="w-full h-full object-cover"
+                @error="$event.target.style.display='none'; $event.target.nextElementSibling.style.display='flex'"
+              />
+              <PhotoIcon class="w-6 h-6 text-gray-300" :style="item.producto?.foto_url ? 'display:none' : ''" />
+            </button>
+
             <div class="flex-1 min-w-0">
               <p class="font-medium text-sm text-gray-800 truncate">{{ item.producto?.nombre }}</p>
-              <p class="text-xs text-gray-400">{{ item.producto?.categoria }}</p>
+              <div class="flex items-center gap-1.5">
+                <p class="text-xs text-gray-400">{{ item.producto?.categoria }}</p>
+                <span v-if="esVistaGlobal && item.tiendas_count" class="inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-700">
+                  {{ item.tiendas_count }} {{ item.tiendas_count === 1 ? 'tienda' : 'tiendas' }}
+                </span>
+              </div>
             </div>
             <button
+              v-if="puedeGestionar"
               @click="openGestionar(item)"
-              class="text-blue-600 text-xs font-medium flex items-center gap-1 flex-shrink-0 ml-2"
+              class="text-blue-600 text-xs font-medium flex items-center gap-1 flex-shrink-0"
             >
               <PencilIcon class="w-4 h-4" />
               Gestionar
@@ -219,7 +476,7 @@ onMounted(async () => {
           </div>
 
           <!-- Stock -->
-          <div class="grid grid-cols-4 gap-2 text-center">
+          <div :class="esVistaGlobal ? 'grid grid-cols-3 gap-2 text-center' : 'grid grid-cols-4 gap-2 text-center'">
             <div class="bg-gray-50 rounded-lg p-1.5">
               <p class="text-lg font-bold text-gray-800">{{ item.cantidad_disponible }}</p>
               <p class="text-xs text-gray-400">Disponible</p>
@@ -232,7 +489,7 @@ onMounted(async () => {
               <p class="text-lg font-bold text-green-600">{{ item.stock_libre }}</p>
               <p class="text-xs text-gray-400">Libre</p>
             </div>
-            <div class="bg-gray-50 rounded-lg p-1.5">
+            <div v-if="!esVistaGlobal" class="bg-gray-50 rounded-lg p-1.5">
               <p class="text-lg font-bold text-gray-600">{{ item.stock_minimo }}</p>
               <p class="text-xs text-gray-400">Mínimo</p>
             </div>
@@ -249,6 +506,56 @@ onMounted(async () => {
               Bajo stock
             </span>
           </div>
+
+          <!-- Variantes tela/color -->
+          <div v-if="!esVistaGlobal" class="border-t border-gray-100 pt-2">
+            <button
+              @click="toggleVariantes(item)"
+              class="text-xs text-blue-600 font-medium flex items-center gap-1"
+            >
+              <span>{{ variantesAbiertas[item.producto_id] ? '▾' : '▸' }}</span>
+              Variantes de tela/color
+              <span v-if="variantesData[item.producto_id]?.length"
+                class="bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded-full font-bold">
+                {{ variantesData[item.producto_id].length }}
+              </span>
+            </button>
+
+            <div v-if="variantesAbiertas[item.producto_id]" class="mt-2 space-y-2">
+              <div v-if="varianteCargando[item.producto_id]" class="text-xs text-gray-400">Cargando...</div>
+              <template v-else>
+                <!-- Chips de variantes -->
+                <div class="flex flex-wrap gap-1.5">
+                  <button
+                    v-for="v in variantesData[item.producto_id]"
+                    :key="v.id"
+                    @click="puedeGestionar && abrirStockVariante(v, item)"
+                    :class="['px-2.5 py-1 rounded-full text-xs font-medium border transition-colors',
+                      v.stock_libre > 0
+                        ? 'bg-green-50 border-green-300 text-green-800'
+                        : 'bg-gray-50 border-gray-200 text-gray-400',
+                      puedeGestionar ? 'cursor-pointer hover:opacity-75' : 'cursor-default']"
+                    :title="puedeGestionar ? 'Clic para agregar stock' : ''"
+                  >
+                    {{ v.marca_tela }} · {{ v.nombre_color }}
+                    <span class="ml-1 font-bold">{{ v.stock_libre ?? '—' }}</span>
+                  </button>
+                  <span v-if="!variantesData[item.producto_id]?.length" class="text-xs text-gray-400 italic">
+                    Sin variantes registradas
+                  </span>
+                </div>
+
+                <!-- Supervisor: crear variante -->
+                <button
+                  v-if="auth.isSupervisor"
+                  @click="abrirNuevaVariante(item)"
+                  class="text-xs text-blue-500 font-medium flex items-center gap-0.5 hover:text-blue-700"
+                >
+                  + Nueva variante
+                </button>
+              </template>
+            </div>
+          </div>
         </li>
       </ul>
 
@@ -261,6 +568,185 @@ onMounted(async () => {
       </div>
     </template>
 
+    <!-- Modal Agregar Producto -->
+    <Transition name="fade">
+      <div v-if="mostrarAgregarProducto" class="fixed inset-0 z-50 flex items-end sm:items-center justify-center" @click.self="mostrarAgregarProducto = false">
+        <div class="absolute inset-0 bg-black/40" />
+        <div class="relative bg-white rounded-t-2xl sm:rounded-2xl w-full sm:max-w-lg flex flex-col max-h-[90vh]">
+
+          <!-- Cabecera fija -->
+          <div class="flex items-center justify-between px-5 pt-5 pb-3 border-b border-gray-100 flex-shrink-0">
+            <h3 class="text-lg font-bold text-gray-800">Nuevo producto</h3>
+            <button @click="mostrarAgregarProducto = false" class="text-gray-400 text-2xl leading-none">&times;</button>
+          </div>
+
+          <!-- Cuerpo scrollable -->
+          <div class="overflow-y-auto flex-1 px-5 py-4 space-y-3">
+
+            <!-- Nombre -->
+            <div>
+              <label class="block text-sm font-medium text-gray-700 mb-1">Nombre <span class="text-red-500">*</span></label>
+              <input v-model="formProducto.nombre" type="text" placeholder="Ej: Sofá 3 puestos..." class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            </div>
+
+            <!-- Categoría + Precio -->
+            <div class="grid grid-cols-2 gap-3">
+              <div>
+                <label class="block text-sm font-medium text-gray-700 mb-1">Categoría</label>
+                <input v-model="formProducto.categoria" type="text" placeholder="Ej: Sofás" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              </div>
+              <div>
+                <label class="block text-sm font-medium text-gray-700 mb-1">Precio base <span class="text-red-500">*</span></label>
+                <input v-model="formProducto.precio_base" type="number" min="0" placeholder="0" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              </div>
+            </div>
+
+            <!-- Medidas + Material -->
+            <div class="grid grid-cols-2 gap-3">
+              <div>
+                <label class="block text-sm font-medium text-gray-700 mb-1">Medidas</label>
+                <input v-model="formProducto.medidas" type="text" placeholder="Ej: 200x90x80 cm" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              </div>
+              <div>
+                <label class="block text-sm font-medium text-gray-700 mb-1">Material</label>
+                <input v-model="formProducto.material" type="text" placeholder="Ej: Cuero, tela..." class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              </div>
+            </div>
+
+            <!-- Foto -->
+            <div>
+              <label class="block text-sm font-medium text-gray-700 mb-2">Foto del producto</label>
+              <input ref="fotoInput" type="file" accept="image/*" class="hidden" @change="onFotoChange" />
+              <div class="flex items-center gap-4">
+                <!-- Preview / placeholder clickeable -->
+                <button
+                  type="button"
+                  @click="fotoInput.click()"
+                  class="flex-shrink-0 w-20 h-20 rounded-xl overflow-hidden bg-gray-100 border-2 border-dashed border-gray-300 flex items-center justify-center hover:border-blue-400 transition-colors"
+                >
+                  <img v-if="fotoPreviewUrl" :src="fotoPreviewUrl" class="w-full h-full object-cover" />
+                  <PhotoIcon v-else class="w-8 h-8 text-gray-300" />
+                </button>
+                <!-- Acciones -->
+                <div>
+                  <button type="button" @click="fotoInput.click()" class="text-sm text-blue-600 font-medium hover:underline block">
+                    {{ fotoFile ? 'Cambiar foto' : 'Seleccionar foto' }}
+                  </button>
+                  <p v-if="fotoFile" class="text-xs text-gray-500 mt-0.5 max-w-[160px] truncate">{{ fotoFile.name }}</p>
+                  <p v-else class="text-xs text-gray-400 mt-0.5">JPG, PNG, WEBP · máx 5 MB</p>
+                  <button v-if="fotoFile" type="button" @click="quitarFoto" class="text-xs text-red-500 mt-1 hover:underline">Quitar</button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Descripción -->
+            <div>
+              <label class="block text-sm font-medium text-gray-700 mb-1">Descripción</label>
+              <textarea v-model="formProducto.descripcion" rows="2" placeholder="Descripción del producto..." class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none" />
+            </div>
+
+            <!-- Personalizable -->
+            <label class="flex items-center gap-2 cursor-pointer select-none">
+              <input type="checkbox" v-model="formProducto.personalizable" class="rounded w-4 h-4 text-blue-600" />
+              <span class="text-sm text-gray-700">Producto personalizable (permite specs al vender)</span>
+            </label>
+
+            <div class="border-t border-gray-100" />
+
+            <!-- ── Tiendas ── -->
+
+            <!-- Supervisor: selector de tiendas -->
+            <div v-if="auth.isSupervisor">
+              <label class="block text-sm font-medium text-gray-700 mb-2">Disponible en tiendas <span class="text-red-500">*</span></label>
+
+              <!-- Todas -->
+              <label class="flex items-center gap-2 cursor-pointer mb-2 select-none">
+                <input
+                  type="checkbox"
+                  :checked="todasTiendasSeleccionadas"
+                  :indeterminate="tiendasFormSeleccionadas.length > 0 && !todasTiendasSeleccionadas"
+                  @change="toggleTodasTiendas"
+                  class="rounded w-4 h-4 text-blue-600"
+                />
+                <span class="text-sm font-semibold text-gray-800">Todas las tiendas</span>
+              </label>
+
+              <!-- Por tienda -->
+              <div class="space-y-1.5 pl-6">
+                <label
+                  v-for="t in tiendas"
+                  :key="t.id"
+                  class="flex items-center gap-2 cursor-pointer select-none"
+                >
+                  <input
+                    type="checkbox"
+                    :value="t.id"
+                    v-model="tiendasFormSeleccionadas"
+                    class="rounded w-4 h-4 text-blue-600"
+                  />
+                  <span class="text-sm text-gray-700">{{ t.nombre }}<span v-if="t.ciudad" class="text-gray-400"> · {{ t.ciudad }}</span></span>
+                </label>
+              </div>
+            </div>
+
+            <!-- Vendedor: solo su tienda -->
+            <div v-else class="bg-blue-50 rounded-lg px-3 py-2.5 flex items-center gap-2">
+              <ArchiveBoxIcon class="w-4 h-4 text-blue-500 flex-shrink-0" />
+              <div>
+                <p class="text-xs text-blue-500 font-medium">Se creará en tu tienda</p>
+                <p class="text-sm font-semibold text-blue-700">
+                  {{ tiendas.find(t => t.id == auth.usuario?.tienda_default_id)?.nombre ?? 'Tu tienda' }}
+                </p>
+              </div>
+            </div>
+
+            <p v-if="errCrearProducto" class="text-xs text-red-600 bg-red-50 rounded-lg px-3 py-2">{{ errCrearProducto }}</p>
+          </div>
+
+          <!-- Pie fijo -->
+          <div class="px-5 pb-5 pt-3 border-t border-gray-100 flex-shrink-0">
+            <button
+              @click="crearProducto"
+              :disabled="creandoProducto"
+              class="w-full bg-blue-600 text-white rounded-xl py-3 text-sm font-bold hover:bg-blue-700 disabled:opacity-50 transition-colors"
+            >
+              {{ subiendoFoto ? 'Subiendo foto...' : creandoProducto ? 'Creando...' : 'Crear producto' }}
+            </button>
+          </div>
+        </div>
+      </div>
+    </Transition>
+
+    <!-- Lightbox foto -->
+    <Transition name="fade">
+      <div
+        v-if="fotoModal"
+        class="fixed inset-0 z-[60] flex items-center justify-center p-6"
+        @click.self="fotoModal = false"
+      >
+        <div class="absolute inset-0 bg-black/85" @click="fotoModal = false" />
+        <div class="relative w-full max-w-sm">
+          <button
+            @click="fotoModal = false"
+            class="absolute -top-3 -right-3 z-10 bg-white rounded-full p-1.5 shadow-lg"
+          >
+            <XMarkIcon class="w-5 h-5 text-gray-700" />
+          </button>
+          <div class="bg-white rounded-2xl overflow-hidden shadow-2xl">
+            <img
+              :src="fotoProducto?.foto_url"
+              :alt="fotoProducto?.nombre"
+              class="w-full object-contain max-h-72"
+            />
+            <div class="px-4 py-3 border-t border-gray-100">
+              <p class="text-sm font-semibold text-gray-800 text-center">{{ fotoProducto?.nombre }}</p>
+              <p v-if="fotoProducto?.categoria" class="text-xs text-gray-400 text-center mt-0.5">{{ fotoProducto?.categoria }}</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </Transition>
+
     <!-- Modal Gestionar -->
     <Transition name="fade">
       <div v-if="mostrarGestionar" class="fixed inset-0 z-50 flex items-end sm:items-center justify-center" @click.self="mostrarGestionar = false">
@@ -271,7 +757,21 @@ onMounted(async () => {
             <button @click="mostrarGestionar = false" class="text-gray-400 text-2xl leading-none">&times;</button>
           </div>
 
-          <p class="text-sm font-medium text-gray-800">{{ itemGestionar?.producto?.nombre }}</p>
+          <!-- Foto en modal gestionar -->
+          <div class="flex items-center gap-3">
+            <div
+              v-if="itemGestionar?.producto?.foto_url"
+              class="w-14 h-14 rounded-xl overflow-hidden bg-gray-100 flex-shrink-0 cursor-pointer hover:opacity-80 transition-opacity"
+              @click="verFoto(itemGestionar.producto)"
+              title="Ver foto completa"
+            >
+              <img :src="itemGestionar.producto.foto_url" :alt="itemGestionar.producto.nombre" class="w-full h-full object-cover" />
+            </div>
+            <div class="w-14 h-14 rounded-xl bg-gray-100 flex items-center justify-center flex-shrink-0" v-else>
+              <PhotoIcon class="w-7 h-7 text-gray-300" />
+            </div>
+            <p class="text-sm font-medium text-gray-800">{{ itemGestionar?.producto?.nombre }}</p>
+          </div>
 
           <!-- Cambiar precio -->
           <div>
@@ -314,12 +814,81 @@ onMounted(async () => {
                 Agregar
               </button>
             </div>
+            <p v-if="esVistaGlobal" class="text-xs text-blue-600 mt-1">Se agregará a todas las tiendas donde existe este producto</p>
             <input
               v-model="stockMotivo"
               class="mt-2 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
               placeholder="Motivo (opcional)"
             />
             <p v-if="stockError" class="text-xs text-red-600 mt-1">{{ stockError }}</p>
+          </div>
+        </div>
+      </div>
+    </Transition>
+
+    <!-- Modal: Agregar stock a variante -->
+    <Transition name="fade">
+      <div v-if="mostrarStockVariante" class="fixed inset-0 z-50 flex items-end sm:items-center justify-center" @click.self="mostrarStockVariante = false">
+        <div class="absolute inset-0 bg-black/40" />
+        <div class="relative bg-white rounded-t-2xl sm:rounded-2xl w-full sm:max-w-sm p-5 space-y-4">
+          <div class="flex items-center justify-between">
+            <div>
+              <h3 class="text-base font-bold text-gray-800">Agregar stock · variante</h3>
+              <p class="text-xs text-gray-500 mt-0.5">
+                {{ varianteStockItem?.variante?.marca_tela }} · {{ varianteStockItem?.variante?.nombre_color }}
+              </p>
+            </div>
+            <button @click="mostrarStockVariante = false" class="text-gray-400 text-2xl leading-none">&times;</button>
+          </div>
+          <div class="space-y-3">
+            <div>
+              <label class="block text-sm font-medium text-gray-700 mb-1">Cantidad</label>
+              <input v-model.number="varianteStockCantidad" type="number" min="1"
+                class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            </div>
+            <div>
+              <label class="block text-sm font-medium text-gray-700 mb-1">Motivo (opcional)</label>
+              <input v-model="varianteStockMotivo"
+                class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                placeholder="Entrada de bodega..." />
+            </div>
+            <p v-if="varianteStockError" class="text-xs text-red-600">{{ varianteStockError }}</p>
+            <button @click="guardarStockVariante" :disabled="varianteStockLoading"
+              class="w-full bg-green-600 text-white rounded-lg py-2.5 text-sm font-semibold hover:bg-green-700 disabled:opacity-50">
+              {{ varianteStockLoading ? 'Guardando...' : 'Agregar stock' }}
+            </button>
+          </div>
+        </div>
+      </div>
+    </Transition>
+
+    <!-- Modal: Nueva variante (supervisor) -->
+    <Transition name="fade">
+      <div v-if="mostrarNuevaVariante" class="fixed inset-0 z-50 flex items-end sm:items-center justify-center" @click.self="mostrarNuevaVariante = false">
+        <div class="absolute inset-0 bg-black/40" />
+        <div class="relative bg-white rounded-t-2xl sm:rounded-2xl w-full sm:max-w-sm p-5 space-y-4">
+          <div class="flex items-center justify-between">
+            <h3 class="text-base font-bold text-gray-800">Nueva variante de tela</h3>
+            <button @click="mostrarNuevaVariante = false" class="text-gray-400 text-2xl leading-none">&times;</button>
+          </div>
+          <div class="space-y-3">
+            <div>
+              <label class="block text-sm font-medium text-gray-700 mb-1">Marca de tela <span class="text-red-500">*</span></label>
+              <input v-model="formVariante.marca_tela"
+                class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                placeholder="Ej: Infinity, Proenza..." />
+            </div>
+            <div>
+              <label class="block text-sm font-medium text-gray-700 mb-1">Nombre del color / tela <span class="text-red-500">*</span></label>
+              <input v-model="formVariante.nombre_color"
+                class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                placeholder="Ej: Azul Cielo, Verde Esmeralda..." />
+            </div>
+            <p v-if="varianteCreandoError" class="text-xs text-red-600">{{ varianteCreandoError }}</p>
+            <button @click="guardarNuevaVariante" :disabled="varianteCreandoLoad"
+              class="w-full bg-blue-600 text-white rounded-lg py-2.5 text-sm font-semibold hover:bg-blue-700 disabled:opacity-50">
+              {{ varianteCreandoLoad ? 'Guardando...' : 'Crear variante' }}
+            </button>
           </div>
         </div>
       </div>

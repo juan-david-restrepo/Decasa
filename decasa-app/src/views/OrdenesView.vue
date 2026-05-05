@@ -1,6 +1,7 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
+import { MagnifyingGlassIcon } from '@heroicons/vue/24/outline'
 import { getOrdenes, getTiendas } from '@/api/ordenes'
 import BadgeEstado from '@/components/common/BadgeEstado.vue'
 import MoneyDisplay from '@/components/common/MoneyDisplay.vue'
@@ -16,6 +17,7 @@ const currentPage = ref(1)
 
 const showFilters = ref(false)
 const tiendas = ref([])
+const busqueda = ref('')
 
 const filtros = ref({
   estado: '',
@@ -56,6 +58,7 @@ async function fetchOrdenes(page = 1, append = false) {
     if (filtros.value.tienda_id) params.tienda_id = filtros.value.tienda_id
     if (filtros.value.desde) params.desde = filtros.value.desde
     if (filtros.value.hasta) params.hasta = filtros.value.hasta
+    if (busqueda.value) params.search = busqueda.value
 
     const { data } = await getOrdenes(params)
 
@@ -84,9 +87,17 @@ function applyFilters() {
 
 function clearFilters() {
   filtros.value = { estado: '', tienda_id: '', desde: '', hasta: '' }
+  busqueda.value = ''
   showFilters.value = false
   currentPage.value = 1
   fetchOrdenes(1, false)
+  setupObserver()
+}
+
+function buscar() {
+  currentPage.value = 1
+  fetchOrdenes(1, false)
+  setupObserver()
 }
 
 async function loadMore() {
@@ -140,6 +151,17 @@ onUnmounted(() => {
       >
         {{ showFilters ? '✕ Cerrar' : '⚙ Filtros' }}
       </button>
+    </div>
+
+    <!-- Buscador -->
+    <div class="relative">
+      <MagnifyingGlassIcon class="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
+      <input
+        v-model="busqueda"
+        @keyup.enter="buscar"
+        placeholder="Buscar por cliente..."
+        class="w-full rounded-lg border border-gray-300 pl-10 pr-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+      />
     </div>
 
     <!-- Panel de filtros -->
@@ -206,7 +228,7 @@ onUnmounted(() => {
     <!-- Empty state -->
     <EmptyState
       v-else-if="ordenes.length === 0"
-      message="No hay órdenes registradas."
+      :message="busqueda ? 'No se encontraron órdenes.' : 'No hay órdenes registradas.'"
     />
 
     <!-- Lista de órdenes -->

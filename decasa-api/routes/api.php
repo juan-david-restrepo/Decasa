@@ -9,6 +9,10 @@ use App\Http\Controllers\ProduccionController;
 use App\Http\Controllers\ProductoController;
 use App\Http\Controllers\ReporteController;
 use App\Http\Controllers\TiendaController;
+use App\Http\Controllers\StatsController;
+use App\Http\Controllers\UploadController;
+use App\Http\Controllers\UsuarioController;
+use App\Http\Controllers\VarianteController;
 use Illuminate\Support\Facades\Route;
 
 // ── Auth (público) ────────────────────────────────────────────────────────────
@@ -24,8 +28,9 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/tiendas', [TiendaController::class, 'index']);
 
     // Productos
-    Route::get('/productos',      [ProductoController::class, 'index']);
-    Route::get('/productos/{id}', [ProductoController::class, 'show']);
+    Route::get('/productos',        [ProductoController::class, 'index']);
+    Route::post('/productos',       [ProductoController::class, 'store']);
+    Route::get('/productos/{id}',   [ProductoController::class, 'show']);
     Route::patch('/productos/{id}', [ProductoController::class, 'update']);
 
     // Clientes
@@ -44,21 +49,60 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/ordenes/{id}/pagos',  [PagoController::class, 'index']);
     Route::post('/ordenes/{id}/pagos', [PagoController::class, 'store']);
 
+    // Subida de archivos
+    Route::post('/upload/foto', [UploadController::class, 'foto']);
+
     // Inventario
-    Route::get('/inventario',          [InventarioController::class, 'index']);
-    Route::post('/inventario/entrada', [InventarioController::class, 'entrada']);
+    Route::get('/inventario',                    [InventarioController::class, 'index']);
+    Route::post('/inventario/entrada',           [InventarioController::class, 'entrada']);
+    Route::post('/inventario/variantes/entrada', [VarianteController::class, 'entrada']);
+
+    // Variantes de producto (tela/color)
+    Route::get('/productos/{id}/variantes',  [VarianteController::class, 'index']);
+    Route::middleware('role:supervisor')->group(function () {
+        Route::post('/productos/{id}/variantes', [VarianteController::class, 'store']);
+    });
+
+    // Usuarios (solo supervisor)
+    Route::middleware('role:supervisor')->group(function () {
+        Route::get('/usuarios',                      [UsuarioController::class, 'index']);
+        Route::get('/usuarios/{id}',                 [UsuarioController::class, 'show']);
+        Route::post('/usuarios',                     [UsuarioController::class, 'store']);
+        Route::put('/usuarios/{id}',                 [UsuarioController::class, 'update']);
+        Route::patch('/usuarios/{id}/toggle-activo', [UsuarioController::class, 'toggleActivo']);
+        Route::post('/usuarios/{id}/reset-password', [UsuarioController::class, 'resetPassword']);
+    });
 
     // Producción
     Route::get('/produccion',        [ProduccionController::class, 'index']);
     Route::patch('/produccion/{id}', [ProduccionController::class, 'update']);
 
-    // Reportes (solo supervisor)
-    Route::middleware('role:supervisor')->prefix('reportes')->group(function () {
-        Route::get('/ventas',         [ReporteController::class, 'ventas']);
-        Route::get('/vendedores',     [ReporteController::class, 'vendedores']);
-        Route::get('/productos-top',  [ReporteController::class, 'productosTop']);
-        Route::get('/pendientes',     [ReporteController::class, 'pendientes']);
-        Route::get('/retrasos',       [ReporteController::class, 'retrasos']);
-        Route::get('/exportar',       [ReporteController::class, 'exportar']);
+    // Stats — ambos roles (vendedor ve solo lo suyo, supervisor ve todo)
+    Route::prefix('stats')->group(function () {
+        Route::get('/panel',            [StatsController::class, 'panel']);
+        Route::get('/tendencia',        [StatsController::class, 'tendencia']);
+        Route::get('/productos',        [StatsController::class, 'productos']);
+        Route::get('/cartera',          [StatsController::class, 'cartera']);
+        Route::get('/vendedores/me',    [StatsController::class, 'statsMe']);
+
+        // Solo supervisor
+        Route::middleware('role:supervisor')->group(function () {
+            Route::get('/tiendas',          [StatsController::class, 'tiendas']);
+            Route::get('/vendedores',       [StatsController::class, 'vendedores']);
+            Route::get('/vendedor/{id}',    [StatsController::class, 'statsVendedor']);
+        });
+    });
+
+    // Reportes
+    Route::prefix('reportes')->group(function () {
+        Route::get('/retrasos', [ReporteController::class, 'retrasos']);
+
+        Route::middleware('role:supervisor')->group(function () {
+            Route::get('/ventas',         [ReporteController::class, 'ventas']);
+            Route::get('/vendedores',     [ReporteController::class, 'vendedores']);
+            Route::get('/productos-top',  [ReporteController::class, 'productosTop']);
+            Route::get('/pendientes',     [ReporteController::class, 'pendientes']);
+            Route::get('/exportar',       [ReporteController::class, 'exportar']);
+        });
     });
 });

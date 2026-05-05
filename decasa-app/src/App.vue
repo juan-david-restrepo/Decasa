@@ -2,6 +2,7 @@
 import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
+import ScrollToTop from '@/components/common/ScrollToTop.vue'
 import {
   HomeIcon,
   ClipboardDocumentListIcon,
@@ -10,6 +11,7 @@ import {
   ArchiveBoxIcon,
   WrenchScrewdriverIcon,
   ChartBarIcon,
+  PresentationChartLineIcon,
   ArrowRightStartOnRectangleIcon,
 } from '@heroicons/vue/24/outline'
 
@@ -25,11 +27,13 @@ const navItems = computed(() => {
     { name: 'ordenes',    label: 'Órdenes',    icon: ClipboardDocumentListIcon },
     { name: 'clientes',   label: 'Clientes',   icon: UserGroupIcon },
     { name: 'inventario', label: 'Inventario', icon: ArchiveBoxIcon },
-    { name: 'produccion', label: 'Producción', icon: WrenchScrewdriverIcon },
   ]
   if (auth.isSupervisor) {
-    base.push({ name: 'usuarios', label: 'Vendedores', icon: UsersIcon })
-    base.push({ name: 'reportes', label: 'Reportes', icon: ChartBarIcon })
+    base.push({ name: 'produccion', label: 'Producción', icon: WrenchScrewdriverIcon })
+    base.push({ name: 'usuarios',   label: 'Vendedores', icon: UsersIcon })
+    base.push({ name: 'reportes',   label: 'Reportes',   icon: ChartBarIcon })
+  } else {
+    base.push({ name: 'mis-stats', label: 'Estadíst.', icon: PresentationChartLineIcon })
   }
   return base
 })
@@ -80,5 +84,8 @@ async function doLogout() {
         {{ item.label }}
       </button>
     </nav>
+
+    <!-- Scroll to top -->
+    <ScrollToTop />
   </div>
 </template>

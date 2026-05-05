@@ -4,9 +4,11 @@ namespace App\Http\Controllers;
 
 use App\Models\Inventario;
 use App\Models\InventarioMovimiento;
+use App\Models\InventarioVariante;
 use App\Models\Orden;
 use App\Models\OrdenItem;
 use App\Models\Produccion;
+use App\Models\ProductoVariante;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
@@ -43,6 +45,10 @@ class OrdenController extends Controller
         if ($v = $request->query('hasta')) {
             $query->whereDate('created_at', '<=', $v);
         }
+        if ($search = $request->query('search')) {
+            $term = "%{$search}%";
+            $query->whereHas('cliente', fn($q) => $q->where('nombre', 'like', $term));
+        }
 
         $ordenes = $query->orderByDesc('created_at')->paginate(20);
 
@@ -70,11 +76,14 @@ class OrdenController extends Controller
             'canal'                         => 'required|in:fisica,whatsapp,red_social,otro',
             'anticipo_pct'                  => 'nullable|numeric|min:1|max:100',
             'notas'                         => 'nullable|string|max:1000',
+            'factura_foto_url'              => 'nullable|string|max:500',
             'anticipo_monto'                => 'required|numeric|min:1',
             'anticipo_metodo'               => 'required|in:efectivo,transferencia,tarjeta,otro',
             'anticipo_referencia'           => 'nullable|string|max:100',
             'items'                         => 'required|array|min:1',
             'items.*.producto_id'           => 'required|exists:productos,id',
+            'items.*.variante_id'           => 'nullable|exists:producto_variantes,id',
+            'items.*.tienda_origen_id'      => 'nullable|exists:tiendas,id',
             'items.*.cantidad'              => 'required|integer|min:1',
             'items.*.precio_unitario'       => 'required|numeric|min:0',
             'items.*.es_personalizado'      => 'nullable|boolean',
@@ -103,51 +112,75 @@ class OrdenController extends Controller
             // --- 1. Verificar stock para items no personalizados (con bloqueo) ---
             foreach ($data['items'] as $item) {
                 if (! ($item['es_personalizado'] ?? false)) {
-                    $inv = Inventario::where('producto_id', $item['producto_id'])
-                        ->where('tienda_id', $tiendaId)
-                        ->lockForUpdate()
-                        ->first();
+                    $varianteId    = $item['variante_id']      ?? null;
+                    $origenTiendaId = $item['tienda_origen_id'] ?? $tiendaId;
+
+                    if ($varianteId) {
+                        $inv = InventarioVariante::where('variante_id', $varianteId)
+                            ->where('tienda_id', $origenTiendaId)
+                            ->lockForUpdate()->first();
+                    } else {
+                        $inv = Inventario::where('producto_id', $item['producto_id'])
+                            ->where('tienda_id', $origenTiendaId)
+                            ->lockForUpdate()->first();
+                    }
 
                     $stockLibre = $inv
                         ? $inv->cantidad_disponible - $inv->cantidad_reservada
                         : 0;
 
                     if ($stockLibre < $item['cantidad']) {
-                        abort(422, "Stock insuficiente para producto ID {$item['producto_id']}. Stock libre: {$stockLibre}, solicitado: {$item['cantidad']}.");
+                        $where = $varianteId ? "variante ID {$varianteId}" : "producto ID {$item['producto_id']}";
+                        abort(422, "Stock insuficiente para {$where}. Stock libre: {$stockLibre}, solicitado: {$item['cantidad']}.");
                     }
                 }
             }
 
             // --- 2. Crear la orden ---
             $orden = Orden::create([
-                'cliente_id'   => $data['cliente_id'],
-                'vendedor_id'  => $request->user()->id,
-                'tienda_id'    => $tiendaId,
-                'canal'        => $data['canal'],
-                'estado'       => 'pendiente_anticipo',
-                'valor_total'  => $valorTotal,
-                'anticipo_pct' => $anticupoPct,
-                'notas'        => $data['notas'] ?? null,
+                'cliente_id'        => $data['cliente_id'],
+                'vendedor_id'       => $request->user()->id,
+                'tienda_id'         => $tiendaId,
+                'canal'             => $data['canal'],
+                'estado'            => 'pendiente_anticipo',
+                'valor_total'       => $valorTotal,
+                'anticipo_pct'      => $anticupoPct,
+                'notas'             => $data['notas'] ?? null,
+                'factura_foto_url'  => $data['factura_foto_url'] ?? null,
             ]);
 
             // --- 3. Crear items, reservar stock y crear producción ---
             foreach ($data['items'] as $itemData) {
                 $esPersonalizado = (bool) ($itemData['es_personalizado'] ?? false);
 
+                $varianteId     = $itemData['variante_id']      ?? null;
+                $origenTiendaId = $itemData['tienda_origen_id'] ?? $tiendaId;
+
+                // Snapshot del nombre de variante para legibilidad
+                $specsExtra = $itemData['specs_personalizacion'] ?? null;
+                if ($varianteId && ! $esPersonalizado) {
+                    $v = ProductoVariante::find($varianteId);
+                    $specsExtra = array_merge($specsExtra ?? [], [
+                        'variante_marca' => $v?->marca_tela,
+                        'variante_color' => $v?->nombre_color,
+                    ]);
+                }
+
                 $item = OrdenItem::create([
                     'orden_id'              => $orden->id,
                     'producto_id'           => $itemData['producto_id'],
+                    'variante_id'           => $varianteId,
+                    'tienda_origen_id'      => $origenTiendaId !== $tiendaId ? $origenTiendaId : null,
                     'cantidad'              => $itemData['cantidad'],
                     'precio_unitario'       => $itemData['precio_unitario'],
                     'es_personalizado'      => $esPersonalizado,
-                    'specs_personalizacion' => $itemData['specs_personalizacion'] ?? null,
+                    'specs_personalizacion' => $specsExtra,
                     'fecha_entrega_prom'    => $esPersonalizado
                         ? now()->addDays(30)->toDateString()
                         : null,
                 ]);
 
                 if ($esPersonalizado) {
-                    // Producción automática: 30 días de plazo
                     Produccion::create([
                         'orden_item_id'    => $item->id,
                         'fecha_inicio'     => now()->toDateString(),
@@ -155,17 +188,25 @@ class OrdenController extends Controller
                         'estado'           => 'en_proceso',
                     ]);
                 } else {
-                    // Reservar stock
-                    Inventario::where('producto_id', $itemData['producto_id'])
-                        ->where('tienda_id', $tiendaId)
-                        ->increment('cantidad_reservada', $itemData['cantidad']);
+                    // Reservar stock en la tienda de origen (puede ser otra tienda)
+                    $motivo = "Orden #{$orden->id}" . ($varianteId ? " ({$specsExtra['variante_marca']} - {$specsExtra['variante_color']})" : '');
+
+                    if ($varianteId) {
+                        InventarioVariante::where('variante_id', $varianteId)
+                            ->where('tienda_id', $origenTiendaId)
+                            ->increment('cantidad_reservada', $itemData['cantidad']);
+                    } else {
+                        Inventario::where('producto_id', $itemData['producto_id'])
+                            ->where('tienda_id', $origenTiendaId)
+                            ->increment('cantidad_reservada', $itemData['cantidad']);
+                    }
 
                     InventarioMovimiento::create([
                         'producto_id' => $itemData['producto_id'],
-                        'tienda_id'   => $tiendaId,
+                        'tienda_id'   => $origenTiendaId,
                         'tipo'        => 'reserva',
                         'cantidad'    => $itemData['cantidad'],
-                        'motivo'      => "Orden #{$orden->id}",
+                        'motivo'      => $motivo,
                         'usuario_id'  => $request->user()->id,
                     ]);
                 }
@@ -254,35 +295,46 @@ class OrdenController extends Controller
 
             $itemsStock = $orden->items->where('es_personalizado', false);
 
-            if ($estadoNuevo === 'entregado') {
-                // Confirmar salida física: restar disponible Y liberar reserva
-                foreach ($itemsStock as $item) {
-                    Inventario::where('producto_id', $item->producto_id)
-                        ->where('tienda_id', $orden->tienda_id)
-                        ->update([
-                            'cantidad_disponible' => DB::raw("cantidad_disponible - {$item->cantidad}"),
-                            'cantidad_reservada'  => DB::raw("cantidad_reservada - {$item->cantidad}"),
-                        ]);
+            foreach ($itemsStock as $item) {
+                $origenId = $item->tienda_origen_id ?? $orden->tienda_id;
 
+                if ($estadoNuevo === 'entregado') {
+                    if ($item->variante_id) {
+                        InventarioVariante::where('variante_id', $item->variante_id)
+                            ->where('tienda_id', $origenId)
+                            ->update([
+                                'cantidad_disponible' => DB::raw("cantidad_disponible - {$item->cantidad}"),
+                                'cantidad_reservada'  => DB::raw("cantidad_reservada - {$item->cantidad}"),
+                            ]);
+                    } else {
+                        Inventario::where('producto_id', $item->producto_id)
+                            ->where('tienda_id', $origenId)
+                            ->update([
+                                'cantidad_disponible' => DB::raw("cantidad_disponible - {$item->cantidad}"),
+                                'cantidad_reservada'  => DB::raw("cantidad_reservada - {$item->cantidad}"),
+                            ]);
+                    }
                     InventarioMovimiento::create([
                         'producto_id' => $item->producto_id,
-                        'tienda_id'   => $orden->tienda_id,
+                        'tienda_id'   => $origenId,
                         'tipo'        => 'salida',
                         'cantidad'    => $item->cantidad,
                         'motivo'      => "Entrega orden #{$orden->id}",
                         'usuario_id'  => $usuario->id,
                     ]);
-                }
-            } elseif ($estadoNuevo === 'cancelado' && $estadoAnterior !== 'cancelado') {
-                // Cancelación: solo liberar la reserva, el stock físico no cambia
-                foreach ($itemsStock as $item) {
-                    Inventario::where('producto_id', $item->producto_id)
-                        ->where('tienda_id', $orden->tienda_id)
-                        ->decrement('cantidad_reservada', $item->cantidad);
-
+                } elseif ($estadoNuevo === 'cancelado' && $estadoAnterior !== 'cancelado') {
+                    if ($item->variante_id) {
+                        InventarioVariante::where('variante_id', $item->variante_id)
+                            ->where('tienda_id', $origenId)
+                            ->decrement('cantidad_reservada', $item->cantidad);
+                    } else {
+                        Inventario::where('producto_id', $item->producto_id)
+                            ->where('tienda_id', $origenId)
+                            ->decrement('cantidad_reservada', $item->cantidad);
+                    }
                     InventarioMovimiento::create([
                         'producto_id' => $item->producto_id,
-                        'tienda_id'   => $orden->tienda_id,
+                        'tienda_id'   => $origenId,
                         'tipo'        => 'liberacion',
                         'cantidad'    => $item->cantidad,
                         'motivo'      => "Cancelación orden #{$orden->id}",

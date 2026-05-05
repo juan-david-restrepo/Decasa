@@ -13,6 +13,8 @@ class OrdenItem extends Model
     protected $fillable = [
         'orden_id',
         'producto_id',
+        'variante_id',
+        'tienda_origen_id',
         'cantidad',
         'precio_unitario',
         'es_personalizado',
@@ -43,5 +45,15 @@ class OrdenItem extends Model
     public function produccion()
     {
         return $this->hasOne(Produccion::class, 'orden_item_id');
+    }
+
+    public function variante()
+    {
+        return $this->belongsTo(ProductoVariante::class, 'variante_id');
+    }
+
+    public function tiendaOrigen()
+    {
+        return $this->belongsTo(Tienda::class, 'tienda_origen_id');
     }
 }

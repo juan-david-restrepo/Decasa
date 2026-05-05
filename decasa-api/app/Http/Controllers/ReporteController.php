@@ -38,7 +38,7 @@ class ReporteController extends Controller
     /** GET /api/reportes/retrasos */
     public function retrasos(Request $request)
     {
-        return response()->json($this->buildRetrasos());
+        return response()->json($this->buildRetrasos($request));
     }
 
     // ─── Export Excel ─────────────────────────────────────────────────────────
@@ -55,7 +55,7 @@ class ReporteController extends Controller
             'vendedores'    => $this->rowsVendedores($request),
             'productos-top' => $this->rowsProductosTop($request),
             'pendientes'    => $this->rowsPendientes($request),
-            'retrasos'      => $this->rowsRetrasos(),
+            'retrasos'      => $this->rowsRetrasos($request),
         };
 
         return Excel::download(
@@ -179,8 +179,11 @@ class ReporteController extends Controller
             ->toArray();
     }
 
-    private function buildRetrasos(): array
+    private function buildRetrasos(Request $request): array
     {
+        $user = $request->user();
+        $vendedorId = $user->rol === 'vendedor' ? $user->id : null;
+
         return DB::table('produccion as pr')
             ->join('orden_items as oi', 'oi.id', '=', 'pr.orden_item_id')
             ->join('ordenes as o',      'o.id',  '=', 'oi.orden_id')
@@ -195,6 +198,7 @@ class ReporteController extends Controller
                          ->whereRaw('pr.fecha_compromiso < CURDATE()')
                   );
             })
+            ->when($vendedorId, fn($q) => $q->where('o.vendedor_id', $vendedorId))
             ->selectRaw('
                 pr.id                AS produccion_id,
                 o.id                 AS orden_id,
@@ -296,9 +300,9 @@ class ReporteController extends Controller
         ];
     }
 
-    private function rowsRetrasos(): array
+    private function rowsRetrasos(Request $request): array
     {
-        $rows = collect($this->buildRetrasos())->map(fn($r) => [
+        $rows = collect($this->buildRetrasos($request))->map(fn($r) => [
             $r->produccion_id, $r->orden_id, $r->cliente, $r->telefono,
             $r->producto, $r->fecha_compromiso, $r->dias_retraso,
             $r->estado, $r->motivo_retraso, $r->vendedor, $r->tienda,

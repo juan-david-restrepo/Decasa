@@ -1,7 +1,8 @@
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { useAuthStore } from '@/stores/auth'
 import {
+  MagnifyingGlassIcon,
   FunnelIcon,
   CheckCircleIcon,
   ClockIcon,
@@ -17,7 +18,14 @@ const auth = useAuthStore()
 const producciones = ref([])
 const tiendas = ref([])
 const loading = ref(true)
+const loadingMore = ref(false)
+const hasMore = ref(true)
+const currentPage = ref(1)
 const showFilters = ref(false)
+const busqueda = ref('')
+
+const sentinel = ref(null)
+let observer = null
 
 const filtros = ref({
   estado: '',
@@ -40,52 +48,79 @@ const estadosOpts = [
 ]
 
 function badgeInfo(p) {
-  if (p.estado === 'entregado') {
-    return { label: 'Entregado', cls: 'bg-gray-100 text-gray-500' }
+  const labels = {
+    en_proceso: { label: 'En proceso', cls: 'bg-green-100 text-green-700' },
+    listo:      { label: 'Listo para entrega', cls: 'bg-blue-100 text-blue-700' },
+    entregado:  { label: 'Entregado', cls: 'bg-gray-100 text-gray-500' },
   }
-  if (p.estado === 'listo') {
-    return { label: 'Listo para entrega', cls: 'bg-blue-100 text-blue-700' }
+  if (p.estado === 'retrasado' || (p.estado === 'en_proceso' && p.dias_restantes !== null && p.dias_restantes < 0)) {
+    return { label: 'Retrasado', cls: 'bg-red-100 text-red-700' }
   }
-  if (p.estado === 'retrasado') {
-    return { label: `${Math.abs(p.dias_restantes)} días retraso`, cls: 'bg-red-100 text-red-700' }
-  }
-  if (p.dias_restantes < 0) {
-    return { label: `${Math.abs(p.dias_restantes)} días retraso`, cls: 'bg-red-100 text-red-700' }
-  }
-  if (p.dias_restantes <= 3) {
-    return { label: `${p.dias_restantes} días`, cls: 'bg-yellow-100 text-yellow-700' }
-  }
-  return { label: `${p.dias_restantes} días restantes`, cls: 'bg-green-100 text-green-700' }
+  return labels[p.estado] || { label: p.estado, cls: 'bg-gray-100 text-gray-500' }
 }
 
 function estadoIcon(p) {
-  if (p.estado === 'entregado') return CheckCircleIcon
-  if (p.estado === 'listo') return ClockIcon
-  if (p.estado === 'retrasado' || p.dias_restantes < 0) return ExclamationTriangleIcon
+  if (p.estado === 'entregado' || p.estado === 'listo') return CheckCircleIcon
+  if (p.estado === 'retrasado' || (p.estado === 'en_proceso' && p.dias_restantes !== null && p.dias_restantes < 0)) return ExclamationTriangleIcon
   return ClockIcon
 }
 
-async function cargarTiendas() {
+async function loadTiendas() {
   try {
     const { data } = await getTiendas()
     tiendas.value = data
   } catch {}
 }
 
-async function cargarProduccion() {
-  loading.value = true
+async function fetchProduccion(page = 1, append = false) {
+  if (page === 1) {
+    loading.value = true
+  } else {
+    loadingMore.value = true
+  }
+
   try {
-    const params = {}
+    const params = { page }
     if (filtros.value.estado) params.estado = filtros.value.estado
     if (filtros.value.tienda_id) params.tienda_id = filtros.value.tienda_id
+    if (busqueda.value) params.search = busqueda.value
 
     const { data } = await getProduccion(params)
-    producciones.value = data
+
+    const list = data.data ?? []
+    if (append) {
+      producciones.value = [...producciones.value, ...list]
+    } else {
+      producciones.value = list
+    }
+
+    hasMore.value = data.current_page < data.last_page
+    currentPage.value = data.current_page
   } catch {
-    producciones.value = []
+    if (page === 1) producciones.value = []
   } finally {
     loading.value = false
+    loadingMore.value = false
   }
+}
+
+function setupObserver() {
+  if (observer) observer.disconnect()
+
+  observer = new IntersectionObserver((entries) => {
+    if (entries[0].isIntersecting && hasMore.value && !loadingMore.value) {
+      loadMore()
+    }
+  }, { rootMargin: '200px' })
+
+  nextTick(() => {
+    if (sentinel.value) observer.observe(sentinel.value)
+  })
+}
+
+async function loadMore() {
+  if (loadingMore.value || !hasMore.value) return
+  await fetchProduccion(currentPage.value + 1, true)
 }
 
 function openModal(p) {
@@ -112,7 +147,8 @@ async function guardarEstado() {
     }
     await updateProduccion(produccionSeleccionada.value.id, data)
     mostrarModal.value = false
-    await cargarProduccion()
+    await fetchProduccion(1, false)
+    setupObserver()
   } catch (e) {
     modalError.value = e.response?.data?.message ?? 'Error al actualizar el estado.'
   } finally {
@@ -128,18 +164,34 @@ function formatFecha(dateStr) {
 
 function applyFilters() {
   showFilters.value = false
-  cargarProduccion()
+  currentPage.value = 1
+  fetchProduccion(1, false)
+  setupObserver()
 }
 
 function clearFilters() {
   filtros.value = { estado: '', tienda_id: '' }
+  busqueda.value = ''
   showFilters.value = false
-  cargarProduccion()
+  currentPage.value = 1
+  fetchProduccion(1, false)
+  setupObserver()
+}
+
+function buscar() {
+  currentPage.value = 1
+  fetchProduccion(1, false)
+  setupObserver()
 }
 
 onMounted(async () => {
-  await cargarTiendas()
-  await cargarProduccion()
+  await loadTiendas()
+  await fetchProduccion(1, false)
+  setupObserver()
+})
+
+onUnmounted(() => {
+  if (observer) observer.disconnect()
 })
 </script>
 
@@ -155,6 +207,17 @@ onMounted(async () => {
         <FunnelIcon class="w-4 h-4" />
         {{ showFilters ? 'Cerrar' : 'Filtros' }}
       </button>
+    </div>
+
+    <!-- Buscador -->
+    <div class="relative">
+      <MagnifyingGlassIcon class="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
+      <input
+        v-model="busqueda"
+        @keyup.enter="buscar"
+        placeholder="Buscar por producto o cliente..."
+        class="w-full rounded-lg border border-gray-300 pl-10 pr-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+      />
     </div>
 
     <!-- Filtros -->
@@ -184,64 +247,72 @@ onMounted(async () => {
     <!-- Empty -->
     <EmptyState
       v-else-if="producciones.length === 0"
-      message="No hay pedidos en producción."
+      :message="busqueda ? 'No se encontraron pedidos.' : 'No hay pedidos en producción.'"
     />
 
     <!-- Lista -->
-    <ul v-else class="space-y-2">
-      <li
-        v-for="p in producciones"
-        :key="p.id"
-        class="bg-white rounded-xl shadow-sm p-4 space-y-2"
-      >
-        <!-- Producto + badge de días -->
-        <div class="flex justify-between items-start">
-          <div class="flex-1 min-w-0">
-            <p class="font-medium text-sm text-gray-800 truncate">{{ p.orden_item?.producto?.nombre }}</p>
-            <p class="text-xs text-gray-400">{{ p.orden_item?.producto?.categoria }}</p>
+    <template v-else>
+      <ul class="space-y-2">
+        <li
+          v-for="p in producciones"
+          :key="p.id"
+          class="bg-white rounded-xl shadow-sm p-4 space-y-2"
+        >
+          <!-- Producto + badge de días -->
+          <div class="flex justify-between items-start">
+            <div class="flex-1 min-w-0">
+              <p class="font-medium text-sm text-gray-800 truncate">{{ p.orden_item?.producto?.nombre }}</p>
+              <p class="text-xs text-gray-400">{{ p.orden_item?.producto?.categoria }}</p>
+            </div>
+            <span
+              :class="['inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium flex-shrink-0 ml-2', badgeInfo(p).cls]"
+            >
+              <component :is="estadoIcon(p)" class="w-3.5 h-3.5" />
+              {{ badgeInfo(p).label }}
+            </span>
           </div>
-          <span
-            :class="['inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium flex-shrink-0 ml-2', badgeInfo(p).cls]"
-          >
-            <component :is="estadoIcon(p)" class="w-3.5 h-3.5" />
-            {{ badgeInfo(p).label }}
-          </span>
-        </div>
 
-        <!-- Info -->
-        <div class="grid grid-cols-2 gap-2 text-xs text-gray-500">
-          <div>
-            <p class="text-gray-400">Cliente</p>
-            <p class="font-medium text-gray-700">{{ p.orden_item?.orden?.cliente?.nombre }}</p>
+          <!-- Info -->
+          <div class="grid grid-cols-2 gap-2 text-xs text-gray-500">
+            <div>
+              <p class="text-gray-400">Cliente</p>
+              <p class="font-medium text-gray-700">{{ p.orden_item?.orden?.cliente?.nombre }}</p>
+            </div>
+            <div>
+              <p class="text-gray-400">Teléfono</p>
+              <p class="font-medium text-gray-700">{{ p.orden_item?.orden?.cliente?.telefono }}</p>
+            </div>
+            <div>
+              <p class="text-gray-400">Vendedor</p>
+              <p class="font-medium text-gray-700">{{ p.orden_item?.orden?.vendedor?.nombre }}</p>
+            </div>
+            <div>
+              <p class="text-gray-400">Tienda</p>
+              <p class="font-medium text-gray-700">{{ p.orden_item?.orden?.tienda?.nombre }}</p>
+            </div>
           </div>
-          <div>
-            <p class="text-gray-400">Teléfono</p>
-            <p class="font-medium text-gray-700">{{ p.orden_item?.orden?.cliente?.telefono }}</p>
-          </div>
-          <div>
-            <p class="text-gray-400">Vendedor</p>
-            <p class="font-medium text-gray-700">{{ p.orden_item?.orden?.vendedor?.nombre }}</p>
-          </div>
-          <div>
-            <p class="text-gray-400">Tienda</p>
-            <p class="font-medium text-gray-700">{{ p.orden_item?.orden?.tienda?.nombre }}</p>
-          </div>
-        </div>
 
-        <!-- Fechas -->
-        <div class="flex justify-between items-center text-xs pt-1 border-t border-gray-100">
-          <span class="text-gray-400">Compromiso: <span class="font-medium text-gray-600">{{ formatFecha(p.fecha_compromiso) }}</span></span>
+          <!-- Fechas -->
+          <div class="flex justify-between items-center text-xs pt-1 border-t border-gray-100">
+            <span class="text-gray-400">Compromiso: <span class="font-medium text-gray-600">{{ formatFecha(p.fecha_compromiso) }}</span></span>
+            <span :class="['font-medium', badgeInfo(p).cls]">{{ badgeInfo(p).label }}</span>
+          </div>
           <button
-            v-if="p.estado !== 'entregado'"
+            v-if="auth.isSupervisor && p.estado !== 'entregado'"
             @click="openModal(p)"
-            class="text-blue-600 font-medium flex items-center gap-1"
+            class="w-full mt-2 text-blue-600 text-xs font-medium text-center py-1.5 rounded-lg border border-blue-200 hover:bg-blue-50 transition-colors"
           >
             Cambiar estado
           </button>
-          <span v-else class="text-gray-400">Entregado {{ formatFecha(p.fecha_real) }}</span>
-        </div>
-      </li>
-    </ul>
+        </li>
+      </ul>
+
+      <!-- Sentinel para scroll infinito -->
+      <div ref="sentinel" class="py-4 text-center">
+        <div v-if="loadingMore" class="text-sm text-gray-400">Cargando más...</div>
+        <div v-else-if="!hasMore && producciones.length > 0" class="text-xs text-gray-300">No hay más pedidos.</div>
+      </div>
+    </template>
 
     <!-- Modal cambiar estado -->
     <Transition name="fade">

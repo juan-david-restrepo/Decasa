@@ -5,20 +5,21 @@ import { getOrden, updateEstado } from '@/api/ordenes'
 import BadgeEstado from '@/components/common/BadgeEstado.vue'
 import MoneyDisplay from '@/components/common/MoneyDisplay.vue'
 import RegistroPagoModal from '@/components/ordenes/RegistroPagoModal.vue'
-import { SparklesIcon } from '@heroicons/vue/24/solid'
+import { SparklesIcon, XMarkIcon } from '@heroicons/vue/24/solid'
 
 const route = useRoute()
 const router = useRouter()
 
 const orden = ref(null)
 const loading = ref(true)
+const verFactura = ref(false)
 const error = ref('')
 const showPagoModal = ref(false)
 const changingEstado = ref(false)
 const estadoError = ref('')
 
 const transicionesValidas = {
-  pendiente_anticipo: ['en_produccion', 'cancelado'],
+  pendiente_anticipo: ['en_produccion', 'listo_entrega', 'cancelado'],
   en_produccion: ['listo_entrega', 'cancelado'],
   listo_entrega: ['entregado', 'cancelado'],
   entregado: [],
@@ -44,16 +45,26 @@ const puedeCambiarEstado = computed(() => {
   return orden.value && !['entregado', 'cancelado'].includes(orden.value.estado)
 })
 
+const tienePersonalizados = computed(() =>
+  orden.value?.items?.some(i => i.es_personalizado) ?? false
+)
+
 const puedeRegistrarPago = computed(() => {
   return orden.value && !['entregado', 'cancelado'].includes(orden.value.estado) && orden.value.saldo_pendiente > 0
 })
 
 const opcionesNuevoEstado = computed(() => {
   if (!orden.value) return []
-  return (transicionesValidas[orden.value.estado] ?? []).map((e) => ({
-    value: e,
-    label: estadosLabel[e] ?? e,
-  }))
+  return (transicionesValidas[orden.value.estado] ?? [])
+    .filter((e) => {
+      if (e === 'en_produccion' && !tienePersonalizados.value) return false
+      if (e === 'listo_entrega' && tienePersonalizados.value && orden.value.estado === 'pendiente_anticipo') return false
+      return true
+    })
+    .map((e) => ({
+      value: e,
+      label: estadosLabel[e] ?? e,
+    }))
 })
 
 async function cargarOrden() {
@@ -157,6 +168,17 @@ onMounted(cargarOrden)
           <span class="text-gray-500">Notas</span>
           <span class="font-medium text-gray-800 text-right max-w-[60%]">{{ orden.notas }}</span>
         </div>
+      </div>
+
+      <!-- Foto de factura -->
+      <div v-if="orden.factura_foto_url" class="bg-white rounded-xl shadow-sm p-4 space-y-2">
+        <p class="text-xs font-semibold text-gray-500 uppercase mb-2">Factura</p>
+        <img
+          :src="orden.factura_foto_url"
+          alt="Factura"
+          class="w-full rounded-lg border border-gray-200 object-contain max-h-72 cursor-pointer"
+          @click="verFactura = true"
+        />
       </div>
 
       <!-- Progreso de pago -->
@@ -289,5 +311,31 @@ onMounted(cargarOrden)
       @close="showPagoModal = false"
       @pago-registrado="onPagoRegistrado"
     />
+
+    <!-- Lightbox foto factura -->
+    <Transition name="fade">
+      <div
+        v-if="verFactura"
+        class="fixed inset-0 z-[60] flex items-center justify-center p-6"
+        @click.self="verFactura = false"
+      >
+        <div class="absolute inset-0 bg-black/85" @click="verFactura = false" />
+        <div class="relative w-full max-w-lg">
+          <button
+            @click="verFactura = false"
+            class="absolute -top-3 -right-3 z-10 bg-white rounded-full p-1.5 shadow-lg"
+          >
+            <XMarkIcon class="w-5 h-5 text-gray-700" />
+          </button>
+          <div class="bg-white rounded-2xl overflow-hidden shadow-2xl">
+            <img
+              :src="orden.factura_foto_url"
+              alt="Factura"
+              class="w-full object-contain max-h-96"
+            />
+          </div>
+        </div>
+      </div>
+    </Transition>
   </div>
 </template>

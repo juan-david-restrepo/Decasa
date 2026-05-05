@@ -21,12 +21,12 @@ const accesos = [
   { label: 'Clientes',     icon: UserGroupIcon, to: { name: 'clientes' } },
   { label: 'Inventario',   icon: ArchiveBoxIcon, to: { name: 'inventario' } },
   { label: 'Producción',   icon: WrenchScrewdriverIcon, to: { name: 'produccion' } },
+  { label: 'Reportes',     icon: ChartBarIcon, to: { name: 'reportes' } },
 ]
 
 const accesosAdmin = [
   { label: 'Vendedores',   icon: UsersIcon, to: { name: 'usuarios' } },
   { label: 'Nuevo vendedor', icon: UserPlusIcon, to: { name: 'usuario-crear' } },
-  { label: 'Reportes',     icon: ChartBarIcon, to: { name: 'reportes' } },
 ]
 </script>
 
@@ -49,15 +49,17 @@ const accesosAdmin = [
         {{ a.label }}
       </button>
 
-      <button
-        v-for="a in accesosAdmin"
-        :key="a.label"
-        @click="router.push(a.to)"
-        class="bg-white rounded-xl shadow-sm p-4 flex flex-col items-center gap-2 text-sm font-medium text-gray-700 hover:bg-blue-50 transition-colors"
-      >
-        <component :is="a.icon" class="w-8 h-8" />
-        {{ a.label }}
-      </button>
+      <template v-if="auth.isSupervisor">
+        <button
+          v-for="a in accesosAdmin"
+          :key="a.label"
+          @click="router.push(a.to)"
+          class="bg-white rounded-xl shadow-sm p-4 flex flex-col items-center gap-2 text-sm font-medium text-gray-700 hover:bg-blue-50 transition-colors"
+        >
+          <component :is="a.icon" class="w-8 h-8" />
+          {{ a.label }}
+        </button>
+      </template>
     </div>
   </div>
 </template>
