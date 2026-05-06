@@ -3,6 +3,7 @@ import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import { MagnifyingGlassIcon } from '@heroicons/vue/24/outline'
 import { getOrdenes, getTiendas } from '@/api/ordenes'
+import { useRealtime } from '@/composables/useRealtime'
 import BadgeEstado from '@/components/common/BadgeEstado.vue'
 import MoneyDisplay from '@/components/common/MoneyDisplay.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
@@ -129,10 +130,17 @@ function formatFecha(dateStr) {
   return d.toLocaleDateString('es-CO', { day: '2-digit', month: 'short' })
 }
 
+const { listen } = useRealtime()
+
 onMounted(async () => {
   await loadTiendas()
   await fetchOrdenes(1, false)
   setupObserver()
+
+  listen('ordenes', 'orden.actualizada', () => {
+    fetchOrdenes(1, false)
+    setupObserver()
+  })
 })
 
 onUnmounted(() => {

@@ -1,11 +1,12 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { getOrden, updateEstado } from '@/api/ordenes'
+import { getOrden, updateEstado, descargarPdfOrden } from '@/api/ordenes'
 import BadgeEstado from '@/components/common/BadgeEstado.vue'
 import MoneyDisplay from '@/components/common/MoneyDisplay.vue'
 import RegistroPagoModal from '@/components/ordenes/RegistroPagoModal.vue'
 import { SparklesIcon, XMarkIcon } from '@heroicons/vue/24/solid'
+import { DocumentIcon } from '@heroicons/vue/24/outline'
 
 const route = useRoute()
 const router = useRouter()
@@ -100,6 +101,18 @@ function onPagoRegistrado() {
   cargarOrden()
 }
 
+async function descargarPdf() {
+  try {
+    const response = await descargarPdfOrden(orden.value.id)
+    const blob = new Blob([response.data], { type: 'application/pdf' })
+    const url = window.URL.createObjectURL(blob)
+    window.open(url, '_blank')
+    setTimeout(() => window.URL.revokeObjectURL(url), 5000)
+  } catch (e) {
+    error.value = 'Error al descargar el PDF.'
+  }
+}
+
 function formatFecha(dateStr) {
   if (!dateStr) return '—'
   const d = new Date(dateStr + 'T00:00:00')
@@ -129,6 +142,15 @@ onMounted(cargarOrden)
       <h2 class="text-lg font-bold text-gray-800 flex-1">
         Orden #{{ orden?.id ?? '...' }}
       </h2>
+      <button
+        v-if="orden"
+        @click="descargarPdf"
+        class="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-blue-600 bg-blue-50 rounded-lg hover:bg-blue-100 transition-colors"
+        title="Descargar PDF"
+      >
+        <DocumentIcon class="w-4 h-4" />
+        PDF
+      </button>
       <BadgeEstado v-if="orden" :estado="orden.estado" />
     </div>
 

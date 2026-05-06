@@ -12,6 +12,8 @@ import {
   XMarkIcon,
 } from '@heroicons/vue/24/outline'
 import { getInventario, addStock, getVariantes, crearVariante, addStockVariante } from '@/api/inventario'
+import { useRealtime } from '@/composables/useRealtime'
+import { TELAS_CATALOGO, marcasOrdenadas, tiposTelaDeM, coloresDeTela } from '@/data/telasCatalogo'
 import { getTiendas } from '@/api/ordenes'
 import MoneyDisplay from '@/components/common/MoneyDisplay.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
@@ -272,9 +274,34 @@ const varianteStockError     = ref('')
 
 const mostrarNuevaVariante  = ref(false)
 const varianteProdId        = ref(null)
-const formVariante          = ref({ marca_tela: '', nombre_color: '' })
+const formVariante          = ref({
+  marca: '', marcaManual: '',
+  marca_tela: '', telaManual: '',
+  nombre_color: '', colorManual: '',
+})
 const varianteCreandoLoad   = ref(false)
 const varianteCreandoError  = ref('')
+
+const tiposTelaOpciones = computed(() =>
+  formVariante.value.marca && formVariante.value.marca !== 'Otro'
+    ? tiposTelaDeM(formVariante.value.marca)
+    : []
+)
+const coloresOpciones = computed(() =>
+  formVariante.value.marca && formVariante.value.marca !== 'Otro' &&
+  formVariante.value.marca_tela && formVariante.value.marca_tela !== 'Otro'
+    ? coloresDeTela(formVariante.value.marca, formVariante.value.marca_tela)
+    : []
+)
+const marcaFinal = computed(() =>
+  formVariante.value.marca === 'Otro' ? formVariante.value.marcaManual : formVariante.value.marca
+)
+const telaFinal = computed(() =>
+  formVariante.value.marca_tela === 'Otro' ? formVariante.value.telaManual : formVariante.value.marca_tela
+)
+const colorFinal = computed(() =>
+  formVariante.value.nombre_color === 'Otro' ? formVariante.value.colorManual : formVariante.value.nombre_color
+)
 
 async function toggleVariantes(item) {
   const pid = item.producto_id
@@ -290,8 +317,17 @@ async function toggleVariantes(item) {
   }
 }
 
+const varianteStockSinAsignar = computed(() => {
+  if (!varianteStockItem.value) return 0
+  const { productoId, item } = varianteStockItem.value
+  const baseDisp = item?.cantidad_disponible ?? 0
+  const variantes = variantesData.value[productoId] ?? []
+  const totalAsignado = variantes.reduce((s, v) => s + (v.stock_disponible ?? 0), 0)
+  return Math.max(0, baseDisp - totalAsignado)
+})
+
 function abrirStockVariante(variante, item) {
-  varianteStockItem.value   = { variante, productoId: item.producto_id }
+  varianteStockItem.value   = { variante, productoId: item.producto_id, item }
   varianteStockCantidad.value = 1
   varianteStockMotivo.value  = ''
   varianteStockError.value   = ''
@@ -326,20 +362,24 @@ async function guardarStockVariante() {
 
 function abrirNuevaVariante(item) {
   varianteProdId.value       = item.producto_id
-  formVariante.value         = { marca_tela: '', nombre_color: '' }
+  formVariante.value         = { marca: '', marcaManual: '', marca_tela: '', telaManual: '', nombre_color: '', colorManual: '' }
   varianteCreandoError.value = ''
   mostrarNuevaVariante.value = true
 }
 
 async function guardarNuevaVariante() {
   varianteCreandoError.value = ''
-  if (!formVariante.value.marca_tela || !formVariante.value.nombre_color) {
-    varianteCreandoError.value = 'Completa marca y color.'
+  if (!marcaFinal.value || !telaFinal.value || !colorFinal.value) {
+    varianteCreandoError.value = 'Completa todos los campos: marca, tipo de tela y color.'
     return
   }
   varianteCreandoLoad.value = true
   try {
-    await crearVariante(varianteProdId.value, formVariante.value)
+    await crearVariante(varianteProdId.value, {
+      marca:        marcaFinal.value,
+      marca_tela:   telaFinal.value,
+      nombre_color: colorFinal.value,
+    })
     mostrarNuevaVariante.value = false
     // Recargar variantes
     const { data } = await getVariantes(varianteProdId.value, tiendaId.value)
@@ -351,6 +391,8 @@ async function guardarNuevaVariante() {
   }
 }
 
+const { listen } = useRealtime()
+
 onMounted(async () => {
   await cargarTiendas()
   if (auth.usuario?.tienda_default_id) {
@@ -358,6 +400,17 @@ onMounted(async () => {
     await cargarInventario()
     setupObserver()
   }
+
+  listen('inventario', 'inventario.actualizado', (e) => {
+    // Recargar solo si el evento es de la tienda que se está viendo
+    const tiendaActual = String(tiendaId.value)
+    if (tiendaActual === 'todas' || tiendaActual === String(e.tienda_id)) {
+      // Limpiar cache de variantes para que se recarguen al expandir
+      variantesData.value = {}
+      variantesAbiertas.value = {}
+      cargarInventario()
+    }
+  })
 })
 </script>
 
@@ -535,7 +588,7 @@ onMounted(async () => {
                         ? 'bg-green-50 border-green-300 text-green-800'
                         : 'bg-gray-50 border-gray-200 text-gray-400',
                       puedeGestionar ? 'cursor-pointer hover:opacity-75' : 'cursor-default']"
-                    :title="puedeGestionar ? 'Clic para agregar stock' : ''"
+                    :title="[v.marca, v.marca_tela, v.nombre_color].filter(Boolean).join(' · ') + (puedeGestionar ? ' — clic para agregar stock' : '')"
                   >
                     {{ v.marca_tela }} · {{ v.nombre_color }}
                     <span class="ml-1 font-bold">{{ v.stock_libre ?? '—' }}</span>
@@ -835,15 +888,34 @@ onMounted(async () => {
             <div>
               <h3 class="text-base font-bold text-gray-800">Agregar stock · variante</h3>
               <p class="text-xs text-gray-500 mt-0.5">
-                {{ varianteStockItem?.variante?.marca_tela }} · {{ varianteStockItem?.variante?.nombre_color }}
+                {{ [varianteStockItem?.variante?.marca, varianteStockItem?.variante?.marca_tela, varianteStockItem?.variante?.nombre_color].filter(Boolean).join(' · ') }}
               </p>
             </div>
             <button @click="mostrarStockVariante = false" class="text-gray-400 text-2xl leading-none">&times;</button>
           </div>
           <div class="space-y-3">
+            <!-- Info de disponibilidad -->
+            <div class="bg-gray-50 rounded-lg px-3 py-2 text-xs space-y-0.5">
+              <div class="flex justify-between text-gray-600">
+                <span>Stock base del producto</span>
+                <span class="font-semibold">{{ varianteStockItem?.item?.cantidad_disponible ?? 0 }}</span>
+              </div>
+              <div class="flex justify-between text-gray-600">
+                <span>Sin asignar a variantes</span>
+                <span class="font-semibold" :class="varianteStockSinAsignar > 0 ? 'text-green-700' : 'text-red-600'">
+                  {{ varianteStockSinAsignar }}
+                </span>
+              </div>
+            </div>
+            <p v-if="varianteStockSinAsignar === 0" class="text-xs text-red-600 bg-red-50 rounded-lg px-3 py-2">
+              No hay unidades sin asignar. Agrega más stock base primero en "Gestionar".
+            </p>
+
             <div>
-              <label class="block text-sm font-medium text-gray-700 mb-1">Cantidad</label>
-              <input v-model.number="varianteStockCantidad" type="number" min="1"
+              <label class="block text-sm font-medium text-gray-700 mb-1">
+                Cantidad <span class="text-gray-400 font-normal">(máx {{ varianteStockSinAsignar }})</span>
+              </label>
+              <input v-model.number="varianteStockCantidad" type="number" min="1" :max="varianteStockSinAsignar"
                 class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
             </div>
             <div>
@@ -853,7 +925,7 @@ onMounted(async () => {
                 placeholder="Entrada de bodega..." />
             </div>
             <p v-if="varianteStockError" class="text-xs text-red-600">{{ varianteStockError }}</p>
-            <button @click="guardarStockVariante" :disabled="varianteStockLoading"
+            <button @click="guardarStockVariante" :disabled="varianteStockLoading || varianteStockSinAsignar === 0"
               class="w-full bg-green-600 text-white rounded-lg py-2.5 text-sm font-semibold hover:bg-green-700 disabled:opacity-50">
               {{ varianteStockLoading ? 'Guardando...' : 'Agregar stock' }}
             </button>
@@ -871,19 +943,86 @@ onMounted(async () => {
             <h3 class="text-base font-bold text-gray-800">Nueva variante de tela</h3>
             <button @click="mostrarNuevaVariante = false" class="text-gray-400 text-2xl leading-none">&times;</button>
           </div>
+
           <div class="space-y-3">
+            <!-- 1. Marca fabricante -->
             <div>
-              <label class="block text-sm font-medium text-gray-700 mb-1">Marca de tela <span class="text-red-500">*</span></label>
-              <input v-model="formVariante.marca_tela"
+              <label class="block text-sm font-medium text-gray-700 mb-1">Marca fabricante <span class="text-red-500">*</span></label>
+              <select
+                v-model="formVariante.marca"
+                @change="formVariante.marca_tela = ''; formVariante.nombre_color = ''"
                 class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                placeholder="Ej: Infinity, Proenza..." />
+              >
+                <option value="">Seleccionar...</option>
+                <option v-for="m in marcasOrdenadas" :key="m" :value="m">{{ m }}</option>
+                <option value="Otro">Otro (ingresar manualmente)</option>
+              </select>
+              <input
+                v-if="formVariante.marca === 'Otro'"
+                v-model="formVariante.marcaManual"
+                class="mt-1.5 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                placeholder="Nombre de la marca..."
+              />
             </div>
-            <div>
-              <label class="block text-sm font-medium text-gray-700 mb-1">Nombre del color / tela <span class="text-red-500">*</span></label>
-              <input v-model="formVariante.nombre_color"
+
+            <!-- 2. Tipo de tela -->
+            <div v-if="formVariante.marca">
+              <label class="block text-sm font-medium text-gray-700 mb-1">Tipo de tela <span class="text-red-500">*</span></label>
+              <select
+                v-if="tiposTelaOpciones.length"
+                v-model="formVariante.marca_tela"
+                @change="formVariante.nombre_color = ''"
                 class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                placeholder="Ej: Azul Cielo, Verde Esmeralda..." />
+              >
+                <option value="">Seleccionar...</option>
+                <option v-for="t in tiposTelaOpciones" :key="t" :value="t">{{ t }}</option>
+                <option value="Otro">Otro (ingresar manualmente)</option>
+              </select>
+              <input
+                v-else
+                v-model="formVariante.telaManual"
+                class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                placeholder="Nombre de la tela..."
+              />
+              <input
+                v-if="formVariante.marca_tela === 'Otro'"
+                v-model="formVariante.telaManual"
+                class="mt-1.5 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                placeholder="Nombre de la tela..."
+              />
             </div>
+
+            <!-- 3. Color -->
+            <div v-if="formVariante.marca && (formVariante.marca_tela || formVariante.marca === 'Otro')">
+              <label class="block text-sm font-medium text-gray-700 mb-1">Color <span class="text-red-500">*</span></label>
+              <select
+                v-if="coloresOpciones.length"
+                v-model="formVariante.nombre_color"
+                class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                <option value="">Seleccionar...</option>
+                <option v-for="c in coloresOpciones" :key="c" :value="c">{{ c }}</option>
+                <option value="Otro">Otro (ingresar manualmente)</option>
+              </select>
+              <input
+                v-else
+                v-model="formVariante.colorManual"
+                class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                placeholder="Nombre del color..."
+              />
+              <input
+                v-if="formVariante.nombre_color === 'Otro'"
+                v-model="formVariante.colorManual"
+                class="mt-1.5 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                placeholder="Nombre del color..."
+              />
+            </div>
+
+            <!-- Preview -->
+            <div v-if="marcaFinal && telaFinal && colorFinal" class="bg-blue-50 rounded-lg px-3 py-2 text-xs text-blue-700 font-medium">
+              Variante: {{ marcaFinal }} · {{ telaFinal }} · {{ colorFinal }}
+            </div>
+
             <p v-if="varianteCreandoError" class="text-xs text-red-600">{{ varianteCreandoError }}</p>
             <button @click="guardarNuevaVariante" :disabled="varianteCreandoLoad"
               class="w-full bg-blue-600 text-white rounded-lg py-2.5 text-sm font-semibold hover:bg-blue-700 disabled:opacity-50">

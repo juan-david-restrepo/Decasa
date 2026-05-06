@@ -10,8 +10,9 @@ use Illuminate\Support\Facades\DB;
 class ClienteController extends Controller
 {
     /**
-     * GET /api/clientes?search=juan&page=1
-     * Búsqueda por nombre o cédula con paginación.
+     * GET /api/clientes?search=juan&page=1&tipo=interesado
+     * Búsqueda por nombre, cédula o teléfono con paginación.
+     * Filtro opcional por tipo: oficial|interesado
      */
     public function index(Request $request)
     {
@@ -26,6 +27,10 @@ class ClienteController extends Controller
             });
         }
 
+        if ($tipo = $request->query('tipo')) {
+            $query->where('tipo', $tipo);
+        }
+
         $clientes = $query->orderBy('nombre')->paginate(20);
 
         return response()->json($clientes);
@@ -37,17 +42,47 @@ class ClienteController extends Controller
     public function store(Request $request)
     {
         $data = $request->validate([
-            'nombre'    => 'required|string|max:120',
-            'cedula'    => 'nullable|string|max:20|unique:clientes,cedula',
-            'telefono'  => 'nullable|string|max:20',
-            'email'     => 'nullable|email|max:120',
-            'direccion' => 'nullable|string|max:200',
-            'canal_pref'=> 'nullable|in:fisica,whatsapp,red_social,otro',
+            'nombre'           => 'required|string|max:120',
+            'cedula'           => 'nullable|string|max:20|unique:clientes,cedula',
+            'telefono'         => 'nullable|string|max:20',
+            'email'            => 'nullable|email|max:120',
+            'direccion'        => 'nullable|string|max:200',
+            'canal_pref'       => 'nullable|in:fisica,whatsapp,red_social,otro',
+            'tipo'             => 'nullable|in:oficial,interesado',
+            'categorias_interes' => 'nullable|array',
+            'categorias_interes.*' => 'string|max:50',
+            'notas_interes'    => 'nullable|string|max:1000',
         ]);
 
         $cliente = Cliente::create($data);
 
         return response()->json($cliente, 201);
+    }
+
+    /**
+     * PUT /api/clientes/{id}
+     * Actualiza campos del cliente (ej. tipo).
+     */
+    public function update(Request $request, int $id)
+    {
+        $cliente = Cliente::findOrFail($id);
+
+        $data = $request->validate([
+            'nombre'            => 'sometimes|string|max:120',
+            'cedula'            => 'sometimes|string|max:20|unique:clientes,cedula,' . $id,
+            'telefono'          => 'sometimes|nullable|string|max:20',
+            'email'             => 'sometimes|nullable|email|max:120',
+            'direccion'         => 'sometimes|nullable|string|max:200',
+            'canal_pref'        => 'sometimes|nullable|in:fisica,whatsapp,red_social,otro',
+            'tipo'              => 'sometimes|in:oficial,interesado',
+            'categorias_interes' => 'sometimes|nullable|array',
+            'categorias_interes.*' => 'string|max:50',
+            'notas_interes'     => 'sometimes|nullable|string|max:1000',
+        ]);
+
+        $cliente->update($data);
+
+        return response()->json($cliente);
     }
 
     /**

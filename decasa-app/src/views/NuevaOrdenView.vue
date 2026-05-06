@@ -1,11 +1,13 @@
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import api from '@/api'
 import { getVariantes } from '@/api/inventario'
-import { SparklesIcon, XMarkIcon } from '@heroicons/vue/24/solid'
-import { PhotoIcon } from '@heroicons/vue/24/outline'
+import { updateCliente, CATEGORIAS_DISPONIBLES } from '@/api/clientes'
+import { ArrowPathIcon, SparklesIcon, XMarkIcon } from '@heroicons/vue/24/solid'
+import { ArrowPathIcon as ArrowPathOutlineIcon, PhotoIcon, UserGroupIcon, ArrowPathIcon as ConvertIcon } from '@heroicons/vue/24/outline'
+import FirmaCanvas from '@/components/FirmaCanvas.vue'
 
 const router = useRouter()
 const auth   = useAuthStore()
@@ -26,9 +28,10 @@ const clienteResultados = ref([])
 const clienteSeleccionado = ref(null)
 const buscandoCliente   = ref(false)
 const modoNuevoCliente  = ref(false)
-const nuevoCliente = ref({ nombre: '', cedula: '', telefono: '', email: '', direccion: '' })
+const nuevoCliente = ref({ nombre: '', cedula: '', telefono: '', email: '', direccion: '', tipo: 'oficial', categorias_interes: [], notas_interes: '' })
 const creandoCliente = ref(false)
 const errCliente = ref('')
+const convirtiendoCliente = ref(false)
 
 async function buscarCliente() {
   if (!clienteQuery.value.trim()) return
@@ -45,6 +48,25 @@ function seleccionarCliente(c) {
   clienteSeleccionado.value = c
   clienteResultados.value   = []
   clienteQuery.value        = c.nombre
+
+  // Si es cliente interesado, sugerir conversión
+  if (c.tipo === 'interesado') {
+    if (confirm(`El cliente "${c.nombre}" está marcado como "Interesado". ¿Convertir a cliente oficial ahora?`)) {
+      convertirAOficial(c)
+    }
+  }
+}
+
+async function convertirAOficial(cliente) {
+  convirtiendoCliente.value = true
+  try {
+    await updateCliente(cliente.id, { tipo: 'oficial' })
+    clienteSeleccionado.value.tipo = 'oficial'
+  } catch (e) {
+    alert('Error al convertir cliente: ' + (e.response?.data?.message ?? 'Error desconocido'))
+  } finally {
+    convirtiendoCliente.value = false
+  }
 }
 
 async function crearCliente() {
@@ -54,13 +76,14 @@ async function crearCliente() {
     const { data } = await api.post('/clientes', nuevoCliente.value)
     seleccionarCliente(data)
     modoNuevoCliente.value = false
-    nuevoCliente.value = { nombre: '', cedula: '', telefono: '', email: '', direccion: '' }
+    nuevoCliente.value = { nombre: '', cedula: '', telefono: '', email: '', direccion: '', tipo: 'oficial', categorias_interes: [], notas_interes: '' }
   } catch (e) {
     errCliente.value = e.response?.data?.message ?? 'Error al crear cliente'
   } finally {
     creandoCliente.value = false
   }
 }
+
 
 // ── Paso 1: Tienda + Canal ────────────────────────────────────────────────────
 const tiendaId = ref(auth.usuario?.tienda_default_id ?? '')
@@ -143,7 +166,7 @@ function _pushItem(producto, variante) {
     : stockLibre(producto)
 
   const varianteLabel = variante
-    ? `${variante.marca_tela} · ${variante.nombre_color}`
+    ? [variante.marca, variante.marca_tela, variante.nombre_color].filter(Boolean).join(' · ')
     : null
 
   const existe = items.value.find((i) =>
@@ -152,19 +175,20 @@ function _pushItem(producto, variante) {
   if (existe) { existe.cantidad++; return }
 
   items.value.push({
-    producto_id:      producto.id,
-    variante_id:      variante?.id ?? null,
-    tienda_origen_id: esOtraTienda ? (tiendaBusqueda.value ?? null) : null,
-    nombre:           producto.nombre,
-    categoria:        producto.categoria,
-    variante_label:   varianteLabel,
-    stock_libre:      stockL,
-    personalizable:   producto.personalizable ?? false,
-    cantidad:         1,
-    precio_unitario:  producto.precio_base ?? 0,
-    es_personalizado: false,
-    specs_descripcion: '',
-    tienda_origen:    esOtraTienda ? nombreTiendaBusqueda() : null,
+    producto_id:             producto.id,
+    variante_id:             variante?.id ?? null,
+    tienda_origen_id:        esOtraTienda ? (tiendaBusqueda.value ?? null) : null,
+    nombre:                  producto.nombre,
+    categoria:               producto.categoria,
+    variante_label:          varianteLabel,
+    stock_libre:             stockL,
+    personalizable:          producto.personalizable ?? false,
+    cantidad:                1,
+    precio_unitario:         producto.precio_base ?? 0,
+    es_personalizado:        false,
+    specs_descripcion:       '',
+    tienda_origen:           esOtraTienda ? nombreTiendaBusqueda() : null,
+    fecha_entrega_prometida: '',
   })
   productoResultados.value = []
   productoQuery.value = ''
@@ -182,10 +206,35 @@ const anticipo_referencia  = ref('')
 const notas                = ref('')
 const submitting           = ref(false)
 const errSubmit            = ref('')
+const cooldown             = ref(0)   // segundos restantes antes de poder reintentar
+let   cooldownTimer        = null
 
 const facturaFotoFile      = ref(null)
 const facturaFotoUrl       = ref('')
 const subiendoFactura      = ref(false)
+
+const firmaBlob            = ref(null)
+const firmaUrl             = ref('')
+const usandoFirmaGuardada  = ref(!!auth.usuario?.firma_url)
+watch(firmaBlob, () => { firmaUrl.value = '' })
+
+function cambiarFirma() {
+  usandoFirmaGuardada.value = false
+  firmaBlob.value = null
+  firmaUrl.value = ''
+}
+
+function usarFirmaGuardada() {
+  usandoFirmaGuardada.value = true
+  firmaBlob.value = null
+  firmaUrl.value = ''
+}
+
+const direccionEnvio       = ref('')
+const ciudadEnvio          = ref('')
+
+// Fecha mínima = hoy (para el date-picker de los ítems)
+const hoy = new Date().toISOString().split('T')[0]
 
 const fotoModal    = ref(false)
 const fotoProducto = ref(null)
@@ -211,11 +260,17 @@ const minimoAnticipo = computed(() =>
 )
 
 function irAPaso3() {
+  const sinFecha = items.value.find(i => !i.fecha_entrega_prometida)
+  if (sinFecha) {
+    alert(`El ítem "${sinFecha.nombre}" no tiene fecha de entrega prometida. Es obligatoria.`)
+    return
+  }
   anticipo_monto.value = minimoAnticipo.value
   step.value = 3
 }
 
 async function submit() {
+  if (submitting.value || subiendoFactura.value || cooldown.value > 0) return
   errSubmit.value = ''
   submitting.value = true
   try {
@@ -232,6 +287,19 @@ async function submit() {
       subiendoFactura.value = false
     }
 
+    // Firma: usar la guardada o subir la nueva
+    if (usandoFirmaGuardada.value && auth.usuario?.firma_url) {
+      firmaUrl.value = auth.usuario.firma_url
+    } else if (firmaBlob.value && !firmaUrl.value) {
+      const fd = new FormData()
+      fd.append('foto', firmaBlob.value, 'firma.png')
+      fd.append('folder', 'firmas')
+      const { data: uploadData } = await api.post('/upload/foto', fd, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      })
+      firmaUrl.value = uploadData.url
+    }
+
     const payload = {
       cliente_id:           clienteSeleccionado.value.id,
       tienda_id:            tiendaId.value,
@@ -242,23 +310,45 @@ async function submit() {
       anticipo_referencia:  anticipo_referencia.value || undefined,
       notas:                notas.value || undefined,
       factura_foto_url:     facturaFotoUrl.value || undefined,
+      firma_url:            firmaUrl.value || undefined,
+      direccion_envio:      direccionEnvio.value || undefined,
+      ciudad_envio:         ciudadEnvio.value || undefined,
       items: items.value.map((i) => ({
-        producto_id:           i.producto_id,
-        variante_id:           i.variante_id   || undefined,
-        tienda_origen_id:      i.tienda_origen_id || undefined,
-        cantidad:              i.cantidad,
-        precio_unitario:       i.precio_unitario,
-        es_personalizado:      i.es_personalizado,
-        specs_personalizacion: i.es_personalizado && i.specs_descripcion
+        producto_id:             i.producto_id,
+        variante_id:             i.variante_id || undefined,
+        tienda_origen_id:        i.tienda_origen_id || undefined,
+        cantidad:                i.cantidad,
+        precio_unitario:         i.precio_unitario,
+        es_personalizado:        i.es_personalizado,
+        fecha_entrega_prometida: i.fecha_entrega_prometida || undefined,
+        specs_personalizacion:   i.es_personalizado && i.specs_descripcion
           ? { descripcion: i.specs_descripcion }
           : undefined,
       })),
     }
 
     const { data } = await api.post('/ordenes', payload)
-    router.push({ name: 'ordenes' })
+    // Si el backend detectó duplicado (409), redirigir a la orden existente
+    if (data?.orden_id) {
+      router.push({ name: 'orden-detalle', params: { id: data.orden_id } })
+    } else {
+      router.push({ name: 'ordenes' })
+    }
   } catch (e) {
+    const status = e.response?.status
+    if (status === 409 && e.response?.data?.orden_id) {
+      // Orden ya creada — ir a ella en vez de mostrar error
+      router.push({ name: 'orden-detalle', params: { id: e.response.data.orden_id } })
+      return
+    }
     errSubmit.value = e.response?.data?.message ?? 'Error al crear la orden'
+    // Cooldown de 4 segundos para evitar doble envío accidental
+    cooldown.value = 4
+    clearInterval(cooldownTimer)
+    cooldownTimer = setInterval(() => {
+      cooldown.value--
+      if (cooldown.value <= 0) clearInterval(cooldownTimer)
+    }, 1000)
   } finally {
     submitting.value = false
     subiendoFactura.value = false
@@ -307,10 +397,13 @@ function removeFacturaFoto() {
       <!-- Tienda -->
       <div>
         <label class="label">Tienda</label>
-        <select v-model="tiendaId" class="input">
+        <select v-if="auth.isSupervisor" v-model="tiendaId" class="input">
           <option value="">Seleccionar...</option>
           <option v-for="t in tiendas" :key="t.id" :value="t.id">{{ t.nombre }}</option>
         </select>
+        <div v-else class="input bg-gray-50 text-gray-700 cursor-default select-none">
+          {{ tiendas.find(t => t.id == tiendaId)?.nombre ?? 'Cargando...' }}
+        </div>
       </div>
 
       <!-- Canal -->
@@ -359,10 +452,19 @@ function removeFacturaFoto() {
             v-for="c in clienteResultados"
             :key="c.id"
             @click="seleccionarCliente(c)"
-            class="px-4 py-3 hover:bg-blue-50 cursor-pointer flex justify-between"
+            class="px-4 py-3 hover:bg-blue-50 cursor-pointer flex items-center justify-between gap-2"
           >
-            <span class="font-medium text-sm text-gray-800">{{ c.nombre }}</span>
-            <span class="text-xs text-gray-400">{{ c.telefono }}</span>
+            <div class="flex items-center gap-2 min-w-0 flex-1">
+              <span class="font-medium text-sm text-gray-800 truncate">{{ c.nombre }}</span>
+              <span
+                v-if="c.tipo === 'interesado'"
+                class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-700 flex-shrink-0"
+              >
+                <UserGroupIcon class="w-3 h-3" />
+                Interesado
+              </span>
+            </div>
+            <span class="text-xs text-gray-400 flex-shrink-0">{{ c.telefono }}</span>
           </li>
         </ul>
 
@@ -376,20 +478,96 @@ function removeFacturaFoto() {
         </div>
 
         <!-- Cliente seleccionado -->
-        <div v-if="clienteSeleccionado" class="mt-2 bg-blue-50 rounded-lg px-3 py-2 text-sm">
-          <span class="font-semibold text-blue-700">{{ clienteSeleccionado.nombre }}</span>
-          <span class="text-blue-500 ml-2">{{ clienteSeleccionado.telefono }}</span>
+        <div v-if="clienteSeleccionado" class="mt-2 bg-blue-50 rounded-lg px-3 py-2 text-sm space-y-1">
+          <div class="flex items-center gap-2">
+            <span class="font-semibold text-blue-700">{{ clienteSeleccionado.nombre }}</span>
+            <span class="text-blue-500">{{ clienteSeleccionado.telefono }}</span>
+            <span
+              v-if="clienteSeleccionado.tipo === 'interesado'"
+              class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-700"
+            >
+              <UserGroupIcon class="w-3 h-3" />
+              Interesado
+            </span>
+          </div>
+          <button
+            v-if="clienteSeleccionado.tipo === 'interesado'"
+            @click="convertirAOficial(clienteSeleccionado)"
+            :disabled="convirtiendoCliente"
+            class="text-xs bg-amber-500 text-white px-2 py-1 rounded-lg hover:bg-amber-600 disabled:opacity-50 flex items-center gap-1"
+          >
+            <ConvertIcon v-if="convirtiendoCliente" class="w-3 h-3 animate-spin" />
+            Convertir a oficial
+          </button>
         </div>
       </div>
 
       <!-- Formulario nuevo cliente -->
       <div v-if="modoNuevoCliente" class="bg-gray-50 rounded-xl p-4 space-y-3">
         <p class="text-sm font-semibold text-gray-700">Nuevo cliente</p>
+
+        <!-- Tipo -->
+        <div>
+          <label class="text-xs text-gray-500 mb-1">Tipo</label>
+          <div class="flex gap-2">
+            <button
+              type="button"
+              @click="nuevoCliente.tipo = 'oficial'"
+              :class="[
+                'flex-1 py-1.5 rounded-lg text-xs font-medium border transition-colors',
+                nuevoCliente.tipo === 'oficial'
+                  ? 'bg-blue-600 text-white border-blue-600'
+                  : 'bg-white text-gray-700 border-gray-300'
+              ]"
+            >Oficial</button>
+            <button
+              type="button"
+              @click="nuevoCliente.tipo = 'interesado'"
+              :class="[
+                'flex-1 py-1.5 rounded-lg text-xs font-medium border transition-colors',
+                nuevoCliente.tipo === 'interesado'
+                  ? 'bg-amber-500 text-white border-amber-500'
+                  : 'bg-white text-gray-700 border-gray-300'
+              ]"
+            >Interesado</button>
+          </div>
+        </div>
+
         <input v-model="nuevoCliente.nombre"    class="input" placeholder="Nombre completo *" />
-        <input v-model="nuevoCliente.cedula"    class="input" placeholder="Cédula" />
+        <input v-model="nuevoCliente.cedula"    class="input" placeholder="Cédula / NIT (empresa)" />
         <input v-model="nuevoCliente.telefono"  class="input" placeholder="Teléfono" type="tel" />
         <input v-model="nuevoCliente.email"     class="input" placeholder="Email" type="email" />
         <input v-model="nuevoCliente.direccion" class="input" placeholder="Dirección" />
+
+        <!-- Campos para interesado -->
+        <template v-if="nuevoCliente.tipo === 'interesado'">
+          <div>
+            <label class="text-xs text-gray-500 mb-1">
+              Categorías de interés
+              <span class="text-gray-400 font-normal">(mantén presionado para varias)</span>
+            </label>
+            <select
+              v-model="nuevoCliente.categorias_interes"
+              multiple
+              size="5"
+              class="input text-sm"
+            >
+              <option v-for="cat in CATEGORIAS_DISPONIBLES" :key="cat" :value="cat">{{ cat }}</option>
+            </select>
+            <div v-if="nuevoCliente.categorias_interes.length > 0" class="flex flex-wrap gap-1 mt-1.5">
+              <span
+                v-for="cat in nuevoCliente.categorias_interes"
+                :key="cat"
+                class="px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-700"
+              >{{ cat }}</span>
+            </div>
+          </div>
+          <div>
+            <label class="text-xs text-gray-500 mb-1">Notas de interés</label>
+            <textarea v-model="nuevoCliente.notas_interes" rows="2" class="input text-sm resize-none" placeholder="¿En qué está interesado?"></textarea>
+          </div>
+        </template>
+
         <p v-if="errCliente" class="text-xs text-red-600">{{ errCliente }}</p>
         <div class="flex gap-2">
           <button @click="modoNuevoCliente = false" class="btn-secondary flex-1">Cancelar</button>
@@ -495,6 +673,8 @@ function removeFacturaFoto() {
         >
           <div class="flex justify-between items-start">
             <div class="flex-1 min-w-0">
+              <!-- Número de orden de compra -->
+              <p class="text-[10px] font-bold text-blue-500 tracking-wide mb-0.5">ÍTEM #{{ idx + 1 }}</p>
               <p class="font-medium text-sm text-gray-800 truncate">{{ item.nombre }}</p>
               <div class="flex flex-wrap items-center gap-1 mt-0.5">
                 <span v-if="item.variante_label"
@@ -531,6 +711,24 @@ function removeFacturaFoto() {
                 class="input text-sm"
               />
             </div>
+          </div>
+
+          <!-- Fecha de entrega manual -->
+          <div>
+            <label class="text-xs text-gray-500">
+              Fecha de entrega prometida
+              <span class="text-red-500 ml-0.5">*</span>
+            </label>
+            <input
+              v-model="item.fecha_entrega_prometida"
+              type="date"
+              :min="hoy"
+              class="input text-sm"
+              :class="!item.fecha_entrega_prometida ? 'border-red-300' : ''"
+            />
+            <p v-if="!item.fecha_entrega_prometida" class="text-xs text-red-500 mt-0.5">
+              Requerida para continuar
+            </p>
           </div>
 
           <label class="flex items-center gap-2 text-sm text-gray-600 cursor-pointer">
@@ -573,6 +771,20 @@ function removeFacturaFoto() {
 
     <!-- ═══════════════════════════════════════════════════════ PASO 3 ══ -->
     <template v-else-if="step === 3">
+
+      <!-- Alerta: firma del vendedor no registrada -->
+      <div v-if="!auth.usuario?.firma_url" class="bg-amber-50 border border-amber-300 rounded-xl px-4 py-3 flex items-start gap-3">
+        <span class="text-xl mt-0.5">⚠️</span>
+        <div class="flex-1">
+          <p class="text-sm font-semibold text-amber-800">Tu firma no está registrada</p>
+          <p class="text-xs text-amber-700 mt-0.5">El PDF de la orden requiere tu firma. Regístrala antes de continuar.</p>
+          <button
+            type="button"
+            @click="router.push({ name: 'perfil' })"
+            class="mt-2 text-xs font-semibold text-amber-800 underline"
+          >Ir a Mi Perfil →</button>
+        </div>
+      </div>
 
       <!-- Resumen de orden -->
       <div class="bg-white rounded-xl shadow-sm p-4 space-y-1">
@@ -651,6 +863,23 @@ function removeFacturaFoto() {
         <textarea v-model="notas" rows="2" class="input resize-none" placeholder="Observaciones de la orden..." />
       </div>
 
+      <!-- Dirección de envío -->
+      <div>
+        <label class="label">Dirección de envío <span class="text-gray-400 font-normal">(si aplica)</span></label>
+        <div class="flex gap-2">
+          <input
+            v-model="ciudadEnvio"
+            class="input w-32 flex-shrink-0"
+            placeholder="Ciudad"
+          />
+          <input
+            v-model="direccionEnvio"
+            class="input flex-1"
+            placeholder="Dirección completa de entrega"
+          />
+        </div>
+      </div>
+
       <!-- Foto de factura -->
       <div>
         <label class="label">Foto de la factura (opcional)</label>
@@ -679,14 +908,54 @@ function removeFacturaFoto() {
         />
       </div>
 
+      <!-- Firma del cliente -->
+      <div>
+        <label class="label">
+          Firma del cliente
+          <span class="text-red-500 ml-0.5">*</span>
+        </label>
+
+        <!-- Firma guardada en uso -->
+        <div v-if="usandoFirmaGuardada && auth.usuario?.firma_url" class="space-y-2">
+          <div class="bg-gray-50 border border-gray-200 rounded-lg p-3 inline-block">
+            <img :src="auth.usuario.firma_url" alt="Mi firma" class="h-16 max-w-xs object-contain" />
+          </div>
+          <div class="flex items-center gap-3">
+            <span class="text-xs text-green-600 font-medium">Usando tu firma guardada</span>
+            <button type="button" @click="cambiarFirma" class="text-xs text-blue-600 hover:underline">
+              Usar otra
+            </button>
+          </div>
+        </div>
+
+        <!-- Canvas para nueva firma -->
+        <div v-else class="space-y-1.5">
+          <FirmaCanvas v-model="firmaBlob" />
+          <div class="flex items-center justify-between">
+            <p v-if="!firmaBlob" class="text-xs text-amber-600 flex items-center gap-1">
+              <span>⚠️</span> Se requiere la firma para confirmar la orden
+            </p>
+            <button
+              v-if="auth.usuario?.firma_url"
+              type="button"
+              @click="usarFirmaGuardada"
+              class="text-xs text-blue-600 hover:underline ml-auto"
+            >
+              Usar mi firma guardada
+            </button>
+          </div>
+        </div>
+      </div>
+
       <p v-if="errSubmit" class="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{{ errSubmit }}</p>
 
        <button
          @click="submit"
-         :disabled="submitting || subiendoFactura || anticipo_monto < minimoAnticipo"
-         class="btn-primary w-full text-base py-3"
+         :disabled="submitting || subiendoFactura || cooldown > 0 || !auth.usuario?.firma_url || anticipo_monto < minimoAnticipo || (!usandoFirmaGuardada && !firmaBlob)"
+         class="btn-primary w-full text-base py-3 flex items-center justify-center gap-2"
        >
-         {{ subiendoFactura ? 'Subiendo foto...' : submitting ? 'Guardando...' : 'Crear orden' }}
+         <ArrowPathOutlineIcon v-if="submitting || subiendoFactura" class="w-5 h-5 animate-spin" />
+         {{ subiendoFactura ? 'Subiendo foto...' : submitting ? 'Guardando...' : cooldown > 0 ? `Reintentar en ${cooldown}s...` : 'Crear orden' }}
        </button>
     </template>
 
@@ -733,6 +1002,10 @@ function removeFacturaFoto() {
                   ? 'border-gray-200 bg-white text-gray-700 hover:bg-gray-50'
                   : 'border-gray-100 bg-gray-50 text-gray-300 cursor-not-allowed']"
           >
+            <template v-if="v.marca">
+              <span class="text-xs text-gray-400">{{ v.marca }}</span>
+              <span class="text-gray-300 mx-1">·</span>
+            </template>
             <span class="font-medium">{{ v.marca_tela }}</span>
             <span class="text-gray-400 mx-1">·</span>
             {{ v.nombre_color }}
@@ -821,7 +1094,8 @@ function removeFacturaFoto() {
   background: #1d4ed8;
 }
 .btn-primary:disabled {
-  opacity: 0.5;
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 .btn-secondary {
   background: #f3f4f6;

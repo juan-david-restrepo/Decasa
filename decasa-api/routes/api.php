@@ -3,6 +3,7 @@
 use App\Http\Controllers\AuthController;
 use App\Http\Controllers\ClienteController;
 use App\Http\Controllers\InventarioController;
+use App\Http\Controllers\NotificacionController;
 use App\Http\Controllers\OrdenController;
 use App\Http\Controllers\PagoController;
 use App\Http\Controllers\ProduccionController;
@@ -21,8 +22,9 @@ Route::post('/auth/login', [AuthController::class, 'login']);
 // ── Rutas protegidas ─────────────────────────────────────────────────────────
 Route::middleware('auth:sanctum')->group(function () {
 
-    Route::post('/auth/logout', [AuthController::class, 'logout']);
-    Route::get('/auth/me',      [AuthController::class, 'me']);
+    Route::post('/auth/logout',    [AuthController::class, 'logout']);
+    Route::get('/auth/me',         [AuthController::class, 'me']);
+    Route::patch('/auth/mi-firma', [AuthController::class, 'guardarFirma']);
 
     // Tiendas (solo lectura — usada por el selector de tienda en la orden)
     Route::get('/tiendas', [TiendaController::class, 'index']);
@@ -37,6 +39,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/clientes',              [ClienteController::class, 'index']);
     Route::post('/clientes',             [ClienteController::class, 'store']);
     Route::get('/clientes/{id}',         [ClienteController::class, 'show']);
+    Route::put('/clientes/{id}',         [ClienteController::class, 'update']);
     Route::get('/clientes/{id}/ordenes', [ClienteController::class, 'ordenes']);
 
     // Órdenes
@@ -44,6 +47,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/ordenes',             [OrdenController::class, 'store']);
     Route::get('/ordenes/{id}',         [OrdenController::class, 'show']);
     Route::patch('/ordenes/{id}/estado', [OrdenController::class, 'updateEstado']);
+    Route::get('/ordenes/{id}/pdf',     [OrdenController::class, 'pdf']);
 
     // Pagos
     Route::get('/ordenes/{id}/pagos',  [PagoController::class, 'index']);
@@ -62,6 +66,11 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::middleware('role:supervisor')->group(function () {
         Route::post('/productos/{id}/variantes', [VarianteController::class, 'store']);
     });
+
+    // Notificaciones (todos los roles, filtrado por rol en el controlador)
+    Route::get('/notificaciones',              [NotificacionController::class, 'index']);
+    Route::patch('/notificaciones/leer-todas', [NotificacionController::class, 'marcarTodas']);
+    Route::patch('/notificaciones/{id}/leida', [NotificacionController::class, 'marcarLeida']);
 
     // Usuarios (solo supervisor)
     Route::middleware('role:supervisor')->group(function () {
@@ -96,13 +105,13 @@ Route::middleware('auth:sanctum')->group(function () {
     // Reportes
     Route::prefix('reportes')->group(function () {
         Route::get('/retrasos', [ReporteController::class, 'retrasos']);
+        Route::get('/exportar', [ReporteController::class, 'exportar']);
 
         Route::middleware('role:supervisor')->group(function () {
             Route::get('/ventas',         [ReporteController::class, 'ventas']);
             Route::get('/vendedores',     [ReporteController::class, 'vendedores']);
             Route::get('/productos-top',  [ReporteController::class, 'productosTop']);
             Route::get('/pendientes',     [ReporteController::class, 'pendientes']);
-            Route::get('/exportar',       [ReporteController::class, 'exportar']);
         });
     });
 });

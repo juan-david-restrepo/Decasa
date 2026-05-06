@@ -7,8 +7,10 @@ import {
   PhoneIcon,
   IdentificationIcon,
   PlusIcon,
+  UserGroupIcon,
 } from '@heroicons/vue/24/outline'
-import { getClientes, createCliente } from '@/api/clientes'
+import { getClientes, createCliente, updateCliente } from '@/api/clientes'
+import { CATEGORIAS_DISPONIBLES } from '@/api/clientes'
 import EmptyState from '@/components/common/EmptyState.vue'
 
 const router = useRouter()
@@ -19,6 +21,7 @@ const loadingMore = ref(false)
 const hasMore = ref(true)
 const currentPage = ref(1)
 const busqueda = ref('')
+const filtroTipo = ref('') // '', 'oficial', 'interesado'
 
 const sentinel = ref(null)
 let observer = null
@@ -33,6 +36,9 @@ const nuevo = ref({
   email: '',
   direccion: '',
   canal_pref: '',
+  tipo: 'oficial',
+  categorias_interes: [],
+  notas_interes: '',
 })
 
 const canalesOpts = [
@@ -41,6 +47,12 @@ const canalesOpts = [
   { value: 'whatsapp', label: 'WhatsApp' },
   { value: 'red_social', label: 'Red social' },
   { value: 'otro', label: 'Otro' },
+]
+
+const tiposFiltro = [
+  { value: '', label: 'Todos' },
+  { value: 'oficial', label: 'Oficiales' },
+  { value: 'interesado', label: 'Interesados' },
 ]
 
 async function fetchClientes(page = 1, append = false) {
@@ -53,6 +65,7 @@ async function fetchClientes(page = 1, append = false) {
   try {
     const params = { page }
     if (busqueda.value) params.search = busqueda.value
+    if (filtroTipo.value) params.tipo = filtroTipo.value
 
     const { data } = await getClientes(params)
 
@@ -76,8 +89,16 @@ async function fetchClientes(page = 1, append = false) {
 function buscar(reset = true) {
   if (reset) {
     currentPage.value = 1
+    setupObserver()      // desconecta observer viejo antes del nuevo fetch
     fetchClientes(1, false)
   }
+}
+
+function cambiarFiltro(tipo) {
+  filtroTipo.value = tipo
+  currentPage.value = 1
+  setupObserver()
+  fetchClientes(1, false)
 }
 
 function setupObserver() {
@@ -105,7 +126,17 @@ function goToCliente(id) {
 
 function abrirCrear() {
   formError.value = ''
-  nuevo.value = { nombre: '', cedula: '', telefono: '', email: '', direccion: '', canal_pref: '' }
+  nuevo.value = {
+    nombre: '',
+    cedula: '',
+    telefono: '',
+    email: '',
+    direccion: '',
+    canal_pref: '',
+    tipo: 'oficial',
+    categorias_interes: [],
+    notas_interes: '',
+  }
   mostrarCrear.value = true
 }
 
@@ -153,6 +184,21 @@ onUnmounted(() => {
       </button>
     </div>
 
+    <!-- Filtros de tipo -->
+    <div class="flex gap-2 flex-wrap">
+      <button
+        v-for="t in tiposFiltro"
+        :key="t.value"
+        @click="cambiarFiltro(t.value)"
+        :class="[
+          'px-3 py-1.5 rounded-lg text-sm font-medium border transition-colors',
+          filtroTipo === t.value
+            ? 'bg-blue-600 text-white border-blue-600'
+            : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'
+        ]"
+      >{{ t.label }}</button>
+    </div>
+
     <!-- Buscador -->
     <div class="relative">
       <MagnifyingGlassIcon class="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
@@ -183,7 +229,16 @@ onUnmounted(() => {
           class="bg-white rounded-xl shadow-sm p-4 flex items-center gap-3 cursor-pointer hover:bg-blue-50 transition-colors active:bg-blue-100"
         >
           <div class="flex-1 min-w-0">
-            <p class="font-medium text-gray-800 truncate">{{ c.nombre }}</p>
+            <div class="flex items-center gap-2">
+              <p class="font-medium text-gray-800 truncate">{{ c.nombre }}</p>
+              <span
+                v-if="c.tipo === 'interesado'"
+                class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-700"
+              >
+                <UserGroupIcon class="w-3 h-3" />
+                Interesado
+              </span>
+            </div>
             <div class="flex items-center gap-3 mt-1">
               <span v-if="c.cedula" class="flex items-center gap-1 text-xs text-gray-400">
                 <IdentificationIcon class="w-3.5 h-3.5" />
@@ -210,10 +265,37 @@ onUnmounted(() => {
     <Transition name="fade">
       <div v-if="mostrarCrear" class="fixed inset-0 z-50 flex items-end sm:items-center justify-center" @click.self="mostrarCrear = false">
         <div class="absolute inset-0 bg-black/40" />
-        <div class="relative bg-white rounded-t-2xl sm:rounded-2xl w-full sm:max-w-md p-5 space-y-3">
+        <div class="relative bg-white rounded-t-2xl sm:rounded-2xl w-full sm:max-w-md p-5 space-y-3 max-h-[90vh] overflow-y-auto">
           <div class="flex items-center justify-between">
             <h3 class="text-lg font-bold text-gray-800">Nuevo cliente</h3>
             <button @click="mostrarCrear = false" class="text-gray-400 text-2xl leading-none">&times;</button>
+          </div>
+
+          <!-- Tipo de cliente -->
+          <div>
+            <label class="block text-xs font-medium text-gray-500 mb-1">Tipo de cliente</label>
+            <div class="flex gap-2">
+              <button
+                type="button"
+                @click="nuevo.tipo = 'oficial'"
+                :class="[
+                  'flex-1 py-2 rounded-lg text-sm font-medium border transition-colors',
+                  nuevo.tipo === 'oficial'
+                    ? 'bg-blue-600 text-white border-blue-600'
+                    : 'bg-white text-gray-700 border-gray-300'
+                ]"
+              >Oficial</button>
+              <button
+                type="button"
+                @click="nuevo.tipo = 'interesado'"
+                :class="[
+                  'flex-1 py-2 rounded-lg text-sm font-medium border transition-colors',
+                  nuevo.tipo === 'interesado'
+                    ? 'bg-amber-500 text-white border-amber-500'
+                    : 'bg-white text-gray-700 border-gray-300'
+                ]"
+              >Interesado</button>
+            </div>
           </div>
 
           <div>
@@ -242,6 +324,35 @@ onUnmounted(() => {
               <option v-for="c in canalesOpts" :key="c.value" :value="c.value">{{ c.label }}</option>
             </select>
           </div>
+
+          <!-- Campos para cliente interesado -->
+          <template v-if="nuevo.tipo === 'interesado'">
+            <div>
+              <label class="block text-xs font-medium text-gray-500 mb-1">
+                Categorías de interés
+                <span class="text-gray-400 font-normal ml-1">(mantén presionado para elegir varias)</span>
+              </label>
+              <select
+                v-model="nuevo.categorias_interes"
+                multiple
+                class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                size="5"
+              >
+                <option v-for="cat in CATEGORIAS_DISPONIBLES" :key="cat" :value="cat">{{ cat }}</option>
+              </select>
+              <div v-if="nuevo.categorias_interes.length > 0" class="flex flex-wrap gap-1.5 mt-2">
+                <span
+                  v-for="cat in nuevo.categorias_interes"
+                  :key="cat"
+                  class="px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-700"
+                >{{ cat }}</span>
+              </div>
+            </div>
+            <div>
+              <label class="block text-xs font-medium text-gray-500 mb-1">Notas de interés</label>
+              <textarea v-model="nuevo.notas_interes" rows="3" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none" placeholder="¿En qué está interesado? Presupuesto, medidas, referencia..."></textarea>
+            </div>
+          </template>
 
           <p v-if="formError" class="text-xs text-red-600 bg-red-50 rounded-lg px-3 py-2">{{ formError }}</p>
 

@@ -17,7 +17,7 @@ class UploadController extends Controller
     {
         $request->validate([
             'foto'  => 'required|file|image|max:5120',
-            'folder' => 'nullable|string|in:productos,facturas',
+            'folder' => 'nullable|string|in:productos,facturas,firmas',
         ]);
 
         $cloudName = config('services.cloudinary.cloud_name');

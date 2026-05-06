@@ -15,7 +15,17 @@ class Cliente extends Model
         'email',
         'direccion',
         'canal_pref',
+        'tipo',
+        'categorias_interes',
+        'notas_interes',
     ];
+
+    protected function casts(): array
+    {
+        return [
+            'categorias_interes' => 'array',
+        ];
+    }
 
     public function ordenes()
     {

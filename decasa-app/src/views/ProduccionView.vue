@@ -11,6 +11,7 @@ import {
 } from '@heroicons/vue/24/outline'
 import { getProduccion, updateProduccion } from '@/api/produccion'
 import { getTiendas } from '@/api/ordenes'
+import { useRealtime } from '@/composables/useRealtime'
 import EmptyState from '@/components/common/EmptyState.vue'
 
 const auth = useAuthStore()
@@ -40,21 +41,25 @@ const modalError = ref('')
 const modalLoading = ref(false)
 
 const estadosOpts = [
-  { value: '', label: 'Todos' },
+  { value: '',           label: 'Todos' },
+  { value: 'pendiente',  label: 'Pendiente' },
   { value: 'en_proceso', label: 'En proceso' },
-  { value: 'listo', label: 'Listo' },
-  { value: 'retrasado', label: 'Retrasado' },
-  { value: 'entregado', label: 'Entregado' },
+  { value: 'listo',      label: 'Listo' },
+  { value: 'retrasado',  label: 'Retrasado' },
+  { value: 'entregado',  label: 'Entregado' },
 ]
 
 function badgeInfo(p) {
-  const labels = {
-    en_proceso: { label: 'En proceso', cls: 'bg-green-100 text-green-700' },
-    listo:      { label: 'Listo para entrega', cls: 'bg-blue-100 text-blue-700' },
-    entregado:  { label: 'Entregado', cls: 'bg-gray-100 text-gray-500' },
+  if (p.estado === 'pendiente') {
+    return { label: 'Pendiente', cls: 'bg-yellow-100 text-yellow-700' }
   }
   if (p.estado === 'retrasado' || (p.estado === 'en_proceso' && p.dias_restantes !== null && p.dias_restantes < 0)) {
     return { label: 'Retrasado', cls: 'bg-red-100 text-red-700' }
+  }
+  const labels = {
+    en_proceso: { label: 'En proceso',       cls: 'bg-green-100 text-green-700' },
+    listo:      { label: 'Listo p/ entrega', cls: 'bg-blue-100 text-blue-700' },
+    entregado:  { label: 'Entregado',        cls: 'bg-gray-100 text-gray-500' },
   }
   return labels[p.estado] || { label: p.estado, cls: 'bg-gray-100 text-gray-500' }
 }
@@ -184,10 +189,17 @@ function buscar() {
   setupObserver()
 }
 
+const { listen } = useRealtime()
+
 onMounted(async () => {
   await loadTiendas()
   await fetchProduccion(1, false)
   setupObserver()
+
+  listen('produccion', 'produccion.actualizada', () => {
+    fetchProduccion(1, false)
+    setupObserver()
+  })
 })
 
 onUnmounted(() => {
@@ -330,6 +342,7 @@ onUnmounted(() => {
           <div>
             <label class="block text-sm font-medium text-gray-700 mb-1">Nuevo estado</label>
             <select v-model="nuevoEstado" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+              <option value="pendiente">Pendiente (no iniciado)</option>
               <option value="en_proceso">En proceso</option>
               <option value="listo">Listo para entrega</option>
               <option value="retrasado">Retrasado</option>

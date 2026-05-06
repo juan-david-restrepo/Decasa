@@ -1,4 +1,5 @@
 <script setup>
+import { computed } from 'vue'
 import { useAuthStore } from '@/stores/auth'
 import { useRouter } from 'vue-router'
 import {
@@ -10,23 +11,25 @@ import {
   ArchiveBoxIcon,
   WrenchScrewdriverIcon,
   ChartBarIcon,
+  PresentationChartLineIcon,
 } from '@heroicons/vue/24/outline'
 
 const auth   = useAuthStore()
 const router = useRouter()
 
-const accesos = [
+const accesos = computed(() => [
   { label: 'Nueva orden',  icon: PlusIcon, to: { name: 'nueva-orden' } },
   { label: 'Órdenes',      icon: ClipboardDocumentListIcon, to: { name: 'ordenes' } },
   { label: 'Clientes',     icon: UserGroupIcon, to: { name: 'clientes' } },
   { label: 'Inventario',   icon: ArchiveBoxIcon, to: { name: 'inventario' } },
   { label: 'Producción',   icon: WrenchScrewdriverIcon, to: { name: 'produccion' } },
-  { label: 'Reportes',     icon: ChartBarIcon, to: { name: 'reportes' } },
-]
+  { label: auth.isSupervisor ? 'Mis estadísticas' : 'Estadísticas', icon: PresentationChartLineIcon, to: { name: 'mis-stats' } },
+])
 
 const accesosAdmin = [
-  { label: 'Vendedores',   icon: UsersIcon, to: { name: 'usuarios' } },
+  { label: 'Vendedores',     icon: UsersIcon, to: { name: 'usuarios' } },
   { label: 'Nuevo vendedor', icon: UserPlusIcon, to: { name: 'usuario-crear' } },
+  { label: 'Reportes',       icon: ChartBarIcon, to: { name: 'reportes' } },
 ]
 </script>
 

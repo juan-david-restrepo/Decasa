@@ -235,10 +235,64 @@ function buildDona() {
 }
 
 // ── Exportar ──────────────────────────────────────────────────────────────────
+function resuelveFechas() {
+  if (modoCustom.value && desdeCustom.value && hastaCustom.value) {
+    return { desde: desdeCustom.value, hasta: hastaCustom.value }
+  }
+  const hoy = new Date()
+  let desde
+  switch (periodoActivo.value) {
+    case 'hoy':
+      desde = new Date(hoy)
+      break
+    case 'semana':
+      desde = new Date(hoy)
+      desde.setDate(hoy.getDate() - hoy.getDay())
+      break
+    case 'mes':
+      desde = new Date(hoy.getFullYear(), hoy.getMonth(), 1)
+      break
+    case 'mes_anterior': {
+      const primerDiaMesAnt = new Date(hoy.getFullYear(), hoy.getMonth() - 1, 1)
+      const ultimoDiaMesAnt = new Date(hoy.getFullYear(), hoy.getMonth(), 0)
+      return {
+        desde: primerDiaMesAnt.toISOString().split('T')[0],
+        hasta: ultimoDiaMesAnt.toISOString().split('T')[0],
+      }
+    }
+    case 'anio':
+      desde = new Date(hoy.getFullYear(), 0, 1)
+      break
+    default:
+      desde = new Date(hoy)
+      desde.setDate(hoy.getDate() - 30)
+  }
+  return { desde: desde.toISOString().split('T')[0], hasta: hoy.toISOString().split('T')[0] }
+}
+
 async function exportar(tipo) {
-  const p = paramsFiltro()
-  const url = `/api/reportes/exportar?tipo=${tipo}&desde=${p.desde ?? ''}&hasta=${p.hasta ?? ''}&periodo=${p.periodo ?? ''}`
-  window.open(url, '_blank')
+  const f = resuelveFechas()
+  const params = new URLSearchParams({
+    tipo,
+    desde: f.desde,
+    hasta: f.hasta,
+    ...(tiendaFiltro.value ? { tienda_id: tiendaFiltro.value } : {}),
+  })
+  try {
+    const res = await api.get(`/reportes/exportar?${params}`, {
+      responseType: 'blob',
+    })
+    const url = window.URL.createObjectURL(new Blob([res.data]))
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `decasa_reporte_${tipo}_${f.desde}_${f.hasta}.xlsx`
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    window.URL.revokeObjectURL(url)
+  } catch (e) {
+    console.error('Error al exportar:', e)
+  }
 }
 
 onMounted(async () => {
@@ -341,7 +395,10 @@ onBeforeUnmount(() => {
 
         <!-- Gráfica línea -->
         <div class="bg-white rounded-xl shadow-sm p-4">
-          <p class="text-sm font-semibold text-gray-700 mb-3">Tendencia del período</p>
+          <div class="flex items-center justify-between mb-3">
+            <p class="text-sm font-semibold text-gray-700">Tendencia del período</p>
+            <button @click="exportar('ventas')" class="text-xs text-blue-600 font-medium hover:underline">Exportar</button>
+          </div>
           <div class="h-52">
             <canvas ref="lineCanvas"></canvas>
           </div>
@@ -363,7 +420,7 @@ onBeforeUnmount(() => {
         <div class="bg-white rounded-xl shadow-sm overflow-hidden">
           <div class="px-4 py-3 border-b border-gray-100 flex items-center justify-between">
             <p class="text-sm font-semibold text-gray-700">Ranking vendedores</p>
-            <button v-if="auth.isSupervisor" @click="exportar('vendedores')" class="text-xs text-blue-600 font-medium hover:underline">Exportar</button>
+            <button @click="exportar('vendedores')" class="text-xs text-blue-600 font-medium hover:underline">Exportar</button>
           </div>
           <div class="overflow-x-auto">
             <table class="w-full text-sm">
@@ -462,7 +519,7 @@ onBeforeUnmount(() => {
         <div class="bg-white rounded-xl shadow-sm overflow-hidden">
           <div class="px-4 py-3 border-b border-gray-100 flex items-center justify-between">
             <p class="text-sm font-semibold text-gray-700">Top 10 productos</p>
-            <button v-if="auth.isSupervisor" @click="exportar('productos-top')" class="text-xs text-blue-600 font-medium hover:underline">Exportar</button>
+            <button @click="exportar('productos-top')" class="text-xs text-blue-600 font-medium hover:underline">Exportar</button>
           </div>
           <ul class="divide-y divide-gray-100">
             <li v-for="(p, i) in productos" :key="p.producto_id"
@@ -482,7 +539,7 @@ onBeforeUnmount(() => {
       <div v-show="tabActivo === 'cartera'" class="space-y-3">
         <div class="flex items-center justify-between">
           <p class="text-sm text-gray-500">{{ cartera.length }} orden{{ cartera.length !== 1 ? 'es' : '' }} con saldo pendiente</p>
-          <button v-if="auth.isSupervisor" @click="exportar('pendientes')" class="text-xs text-blue-600 font-medium hover:underline">Exportar</button>
+          <button @click="exportar('pendientes')" class="text-xs text-blue-600 font-medium hover:underline">Exportar</button>
         </div>
         <ul class="space-y-2">
           <li v-for="o in cartera" :key="o.orden_id"
@@ -523,7 +580,7 @@ onBeforeUnmount(() => {
       <div v-show="tabActivo === 'produccion'" class="space-y-3">
         <div class="flex items-center justify-between">
           <p class="text-sm text-gray-500">{{ retrasos.length }} item{{ retrasos.length !== 1 ? 's' : '' }} en retraso o por vencer</p>
-          <button v-if="auth.isSupervisor" @click="exportar('retrasos')" class="text-xs text-blue-600 font-medium hover:underline">Exportar</button>
+          <button @click="exportar('retrasos')" class="text-xs text-blue-600 font-medium hover:underline">Exportar</button>
         </div>
         <ul class="space-y-2">
           <li v-for="r in retrasos" :key="r.produccion_id"

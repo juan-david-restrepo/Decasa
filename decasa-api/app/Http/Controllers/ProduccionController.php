@@ -2,7 +2,9 @@
 
 namespace App\Http\Controllers;
 
+use App\Events\ProduccionActualizada;
 use App\Models\Produccion;
+use App\Services\NotificacionService;
 use Illuminate\Http\Request;
 
 class ProduccionController extends Controller
@@ -46,6 +48,7 @@ class ProduccionController extends Controller
         }
 
         $producciones = $query
+            ->orderByRaw("FIELD(estado, 'pendiente', 'retrasado', 'en_proceso', 'listo', 'entregado')")
             ->orderBy('fecha_compromiso')
             ->paginate(20)
             ->through(function ($p) {
@@ -78,7 +81,7 @@ class ProduccionController extends Controller
         }
 
         $data = $request->validate([
-            'estado'         => 'required|in:en_proceso,listo,retrasado,entregado',
+            'estado'         => 'required|in:pendiente,en_proceso,listo,retrasado,entregado',
             'motivo_retraso' => 'nullable|string|max:500',
         ]);
 
@@ -101,15 +104,61 @@ class ProduccionController extends Controller
 
         $produccion->update($updates);
 
+        event(new ProduccionActualizada(
+            $produccion->id,
+            $produccion->ordenItem->orden->id,
+            $data['estado'],
+        ));
+
+        // Load relations needed for notification and response
+        $produccion->load([
+            'ordenItem.producto:id,nombre,categoria',
+            'ordenItem.orden.cliente:id,nombre,telefono',
+            'ordenItem.orden.tienda:id,nombre',
+        ]);
+
+        $productoNombre = $produccion->ordenItem->producto->nombre;
+        $clienteNombre  = $produccion->ordenItem->orden->cliente->nombre;
+        $tiendaNombre   = $produccion->ordenItem->orden->tienda->nombre;
+        $ordenId        = $produccion->ordenItem->orden->id;
+
+        $vendedorId = $produccion->ordenItem->orden->vendedor_id;
+
+        if ($data['estado'] === 'retrasado') {
+            NotificacionService::crear(
+                'retrasado',
+                'Producción retrasada',
+                "{$productoNombre} — {$clienteNombre} ({$tiendaNombre})",
+                ['produccion_id' => $produccion->id, 'orden_id' => $ordenId],
+            );
+            NotificacionService::crear(
+                'retrasado',
+                'Tu pedido está atrasado',
+                "{$productoNombre} para {$clienteNombre} ha superado el tiempo comprometido",
+                ['produccion_id' => $produccion->id, 'orden_id' => $ordenId],
+                $vendedorId,
+            );
+        } elseif ($data['estado'] === 'entregado') {
+            NotificacionService::crear(
+                'entregado',
+                'Producto entregado',
+                "Orden #{$ordenId} — {$productoNombre} · {$clienteNombre}",
+                ['produccion_id' => $produccion->id, 'orden_id' => $ordenId],
+            );
+            NotificacionService::crear(
+                'entregado',
+                'Tu pedido fue entregado',
+                "{$productoNombre} para {$clienteNombre} ha sido entregado",
+                ['produccion_id' => $produccion->id, 'orden_id' => $ordenId],
+                $vendedorId,
+            );
+        }
+
         // Recalcular dias_restantes en la respuesta
         $hoy        = now()->startOfDay();
         $compromiso = \Carbon\Carbon::parse($produccion->fecha_compromiso)->startOfDay();
         $produccion->dias_restantes = $hoy->diffInDays($compromiso, false);
 
-        return response()->json($produccion->load([
-            'ordenItem.producto:id,nombre,categoria',
-            'ordenItem.orden.cliente:id,nombre,telefono',
-            'ordenItem.orden.tienda:id,nombre',
-        ]));
+        return response()->json($produccion);
     }
 }

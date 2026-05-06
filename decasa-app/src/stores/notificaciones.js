@@ -1,0 +1,30 @@
+import { defineStore } from 'pinia'
+import { ref, computed } from 'vue'
+import { notificacionesApi } from '@/api/notificaciones'
+
+export const useNotificacionesStore = defineStore('notificaciones', () => {
+  const items    = ref([])
+  const noLeidas = computed(() => items.value.filter(n => !n.leida).length)
+
+  async function cargar() {
+    const { data } = await notificacionesApi.listar()
+    items.value = data
+  }
+
+  function agregarNueva(n) {
+    items.value.unshift(n)
+  }
+
+  async function leer(id) {
+    await notificacionesApi.marcarLeida(id)
+    const n = items.value.find(x => x.id === id)
+    if (n) n.leida = true
+  }
+
+  async function leerTodas() {
+    await notificacionesApi.marcarTodas()
+    items.value.forEach(n => (n.leida = true))
+  }
+
+  return { items, noLeidas, cargar, agregarNueva, leer, leerTodas }
+})

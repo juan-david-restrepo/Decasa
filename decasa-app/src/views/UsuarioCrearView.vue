@@ -21,6 +21,11 @@ const form = ref({
 
 const errores = ref({})
 
+function errMsg(e) {
+  if (!e) return ''
+  return Array.isArray(e) ? e[0] : e
+}
+
 onMounted(async () => {
   try {
     const { data } = await getTiendas()
@@ -50,6 +55,7 @@ async function submit() {
       nombre: form.value.nombre.trim(),
       email: form.value.email.trim(),
       password: form.value.password,
+      password_confirmation: form.value.password_confirmation,
       rol: form.value.rol,
       tienda_default_id: form.value.tienda_default_id,
     })
@@ -86,7 +92,7 @@ async function submit() {
           placeholder="Nombre del usuario"
           :class="{ 'border-red-400': errores.nombre }"
         />
-        <p v-if="errores.nombre" class="text-xs text-red-600 mt-1">{{ errores.nombre[0] ?? errores.nombre }}</p>
+        <p v-if="errores.nombre" class="text-xs text-red-600 mt-1">{{ errMsg(errores.nombre) }}</p>
       </div>
 
       <!-- Email -->
@@ -99,7 +105,7 @@ async function submit() {
           placeholder="correo@decasa.com"
           :class="{ 'border-red-400': errores.email }"
         />
-        <p v-if="errores.email" class="text-xs text-red-600 mt-1">{{ errores.email[0] ?? errores.email }}</p>
+        <p v-if="errores.email" class="text-xs text-red-600 mt-1">{{ errMsg(errores.email) }}</p>
       </div>
 
       <!-- Contraseña -->
@@ -113,7 +119,7 @@ async function submit() {
             placeholder="Mín. 8 caracteres"
             :class="{ 'border-red-400': errores.password }"
           />
-          <p v-if="errores.password" class="text-xs text-red-600 mt-1">{{ errores.password[0] ?? errores.password }}</p>
+          <p v-if="errores.password" class="text-xs text-red-600 mt-1">{{ errMsg(errores.password) }}</p>
         </div>
         <div>
           <label class="block text-sm font-medium text-gray-700 mb-1">Confirmar *</label>
@@ -124,7 +130,7 @@ async function submit() {
             placeholder="Repetir contraseña"
             :class="{ 'border-red-400': errores.password_confirmation }"
           />
-          <p v-if="errores.password_confirmation" class="text-xs text-red-600 mt-1">{{ errores.password_confirmation[0] ?? errores.password_confirmation }}</p>
+          <p v-if="errores.password_confirmation" class="text-xs text-red-600 mt-1">{{ errMsg(errores.password_confirmation) }}</p>
         </div>
       </div>
 
@@ -151,7 +157,7 @@ async function submit() {
           <option value="">Seleccionar tienda...</option>
           <option v-for="t in tiendas" :key="t.id" :value="t.id">{{ t.nombre }}</option>
         </select>
-        <p v-if="errores.tienda_default_id" class="text-xs text-red-600 mt-1">{{ errores.tienda_default_id[0] ?? errores.tienda_default_id }}</p>
+        <p v-if="errores.tienda_default_id" class="text-xs text-red-600 mt-1">{{ errMsg(errores.tienda_default_id) }}</p>
       </div>
 
       <!-- Error general -->

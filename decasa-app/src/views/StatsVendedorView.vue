@@ -3,6 +3,7 @@ import { ref, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import { Chart } from 'chart.js/auto'
 import { getStatsMe, getTendencia } from '@/api/stats'
+import api from '@/api'
 import MoneyDisplay from '@/components/common/MoneyDisplay.vue'
 import BadgeEstado from '@/components/common/BadgeEstado.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
@@ -34,6 +35,66 @@ function aplicarCustom() {
   if (!desdeCustom.value || !hastaCustom.value) return
   modoCustom.value = true
   cargar()
+}
+
+// ── Exportar ──────────────────────────────────────────────────────────────────
+function resuelveFechas() {
+  if (modoCustom.value && desdeCustom.value && hastaCustom.value) {
+    return { desde: desdeCustom.value, hasta: hastaCustom.value }
+  }
+  const hoy = new Date()
+  let desde
+  switch (periodoActivo.value) {
+    case 'hoy':
+      desde = new Date(hoy)
+      break
+    case 'semana':
+      desde = new Date(hoy)
+      desde.setDate(hoy.getDate() - hoy.getDay())
+      break
+    case 'mes':
+      desde = new Date(hoy.getFullYear(), hoy.getMonth(), 1)
+      break
+    case 'mes_anterior': {
+      const primerDiaMesAnt = new Date(hoy.getFullYear(), hoy.getMonth() - 1, 1)
+      const ultimoDiaMesAnt = new Date(hoy.getFullYear(), hoy.getMonth(), 0)
+      return {
+        desde: primerDiaMesAnt.toISOString().split('T')[0],
+        hasta: ultimoDiaMesAnt.toISOString().split('T')[0],
+      }
+    }
+    case 'anio':
+      desde = new Date(hoy.getFullYear(), 0, 1)
+      break
+    default:
+      desde = new Date(hoy)
+      desde.setDate(hoy.getDate() - 30)
+  }
+  return { desde: desde.toISOString().split('T')[0], hasta: hoy.toISOString().split('T')[0] }
+}
+
+async function exportar() {
+  const f = resuelveFechas()
+  const params = new URLSearchParams({
+    tipo: 'ventas',
+    desde: f.desde,
+    hasta: f.hasta,
+  })
+  try {
+    const res = await api.get(`/reportes/exportar?${params}`, {
+      responseType: 'blob',
+    })
+    const url = window.URL.createObjectURL(new Blob([res.data]))
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `mis_ventas_${f.desde}_${f.hasta}.xlsx`
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    window.URL.revokeObjectURL(url)
+  } catch (e) {
+    console.error('Error al exportar:', e)
+  }
 }
 
 // ── Datos ─────────────────────────────────────────────────────────────────────
@@ -162,11 +223,14 @@ onBeforeUnmount(() => {
   <div class="p-4 max-w-2xl mx-auto space-y-4 pb-8">
 
     <!-- Header -->
-    <div>
-      <h2 class="text-lg font-bold text-gray-800">Mis Estadísticas</h2>
-      <p v-if="stats?.vendedor" class="text-xs text-gray-400 mt-0.5">
-        {{ stats.vendedor.nombre }} · {{ stats.vendedor.tienda }}
-      </p>
+    <div class="flex items-center justify-between">
+      <div>
+        <h2 class="text-lg font-bold text-gray-800">Mis Estadísticas</h2>
+        <p v-if="stats?.vendedor" class="text-xs text-gray-400 mt-0.5">
+          {{ stats.vendedor.nombre }} · {{ stats.vendedor.tienda }}
+        </p>
+      </div>
+      <button @click="exportar" class="text-xs text-blue-600 font-medium hover:underline whitespace-nowrap">Exportar</button>
     </div>
 
     <!-- Selector período -->

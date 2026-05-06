@@ -11,8 +11,11 @@ import {
   DevicePhoneMobileIcon,
   GlobeAltIcon,
   QuestionMarkCircleIcon,
+  UserGroupIcon,
+  ArrowPathIcon,
 } from '@heroicons/vue/24/outline'
-import { getCliente, getClienteOrdenes } from '@/api/clientes'
+import { getCliente, getClienteOrdenes, updateCliente } from '@/api/clientes'
+import { CATEGORIAS_DISPONIBLES } from '@/api/clientes'
 import BadgeEstado from '@/components/common/BadgeEstado.vue'
 import MoneyDisplay from '@/components/common/MoneyDisplay.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
@@ -27,6 +30,7 @@ const loadingOrdenes = ref(true)
 const error = ref('')
 const tieneMasOrdenes = ref(true)
 const paginaOrdenes = ref(1)
+const convirtiendo = ref(false)
 
 const canalIcon = computed(() => {
   const map = {
@@ -103,6 +107,19 @@ async function loadMoreOrdenes() {
   await cargarOrdenes(paginaOrdenes.value + 1, true)
 }
 
+async function convertirAOficial() {
+  if (!confirm('¿Convertir este cliente interesado a cliente oficial?')) return
+  convirtiendo.value = true
+  try {
+    await updateCliente(cliente.value.id, { tipo: 'oficial' })
+    await cargarCliente()
+  } catch (e) {
+    error.value = e.response?.data?.message ?? 'Error al convertir cliente.'
+  } finally {
+    convirtiendo.value = false
+  }
+}
+
 const sentinel = ref(null)
 let observer = null
 
@@ -136,6 +153,13 @@ onMounted(async () => {
       <h2 class="text-lg font-bold text-gray-800 flex-1 truncate">
         {{ cliente?.nombre ?? 'Cargando...' }}
       </h2>
+      <span
+        v-if="cliente?.tipo === 'interesado'"
+        class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-amber-100 text-amber-700"
+      >
+        <UserGroupIcon class="w-3.5 h-3.5" />
+        Interesado
+      </span>
     </div>
 
     <!-- Loading -->
@@ -154,6 +178,46 @@ onMounted(async () => {
           <span class="text-sm text-gray-500 capitalize">{{ canalLabel }}</span>
         </div>
         <span class="text-xs text-gray-400">Registrado {{ formatFecha(cliente.created_at) }}</span>
+      </div>
+
+      <!-- Badge de tipo de cliente -->
+      <div
+        v-if="cliente.tipo === 'interesado'"
+        class="bg-amber-50 border border-amber-200 rounded-xl p-4 space-y-3"
+      >
+        <div class="flex items-center justify-between">
+          <p class="text-sm font-semibold text-amber-800">Cliente Interesado</p>
+          <button
+            @click="convertirAOficial"
+            :disabled="convirtiendo"
+            class="text-xs bg-amber-600 text-white px-3 py-1.5 rounded-lg hover:bg-amber-700 disabled:opacity-50 flex items-center gap-1"
+          >
+            <ArrowPathIcon v-if="convirtiendo" class="w-3.5 h-3.5 animate-spin" />
+            Convertir a oficial
+          </button>
+        </div>
+
+        <!-- Categorías de interés -->
+        <div v-if="cliente.categorias_interes?.length > 0">
+          <p class="text-xs font-medium text-amber-700 mb-1.5">Categorías de interés</p>
+          <div class="flex flex-wrap gap-1.5">
+            <span
+              v-for="cat in cliente.categorias_interes"
+              :key="cat"
+              class="px-2.5 py-1 rounded-full text-xs font-medium bg-white text-amber-700 border border-amber-200"
+            >
+              {{ cat }}
+            </span>
+          </div>
+        </div>
+
+        <!-- Notas de interés -->
+        <div v-if="cliente.notas_interes">
+          <p class="text-xs font-medium text-amber-700 mb-1">Notas</p>
+          <p class="text-sm text-amber-800 bg-white rounded-lg p-2.5 border border-amber-200">
+            {{ cliente.notas_interes }}
+          </p>
+        </div>
       </div>
 
       <!-- Info del cliente -->

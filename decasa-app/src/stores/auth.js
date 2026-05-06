@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
+import api from '@/api'
 import { login as apiLogin, logout as apiLogout } from '@/api/auth'
 
 export const useAuthStore = defineStore('auth', () => {
@@ -11,10 +12,40 @@ export const useAuthStore = defineStore('auth', () => {
 
   async function login(email, password) {
     const { data } = await apiLogin(email, password)
-    token.value   = data.token
-    usuario.value = { nombre: data.nombre, rol: data.rol, tienda_default_id: data.tienda_default_id }
+    token.value = data.token
+    usuario.value = {
+      id:                data.id,
+      nombre:            data.nombre,
+      rol:               data.rol,
+      tienda_default_id: data.tienda_default_id,
+      firma_url:         data.firma_url ?? null,
+    }
     localStorage.setItem('token',   data.token)
     localStorage.setItem('usuario', JSON.stringify(usuario.value))
+  }
+
+  // Refresca los datos del usuario desde el servidor (incluye firma_url e id)
+  async function fetchMe() {
+    if (!token.value) return
+    try {
+      const { data } = await api.get('/auth/me')
+      usuario.value = {
+        id:                data.id,
+        nombre:            data.nombre,
+        email:             data.email,
+        rol:               data.rol,
+        tienda_default_id: data.tienda_default_id,
+        firma_url:         data.firma_url ?? null,
+      }
+      localStorage.setItem('usuario', JSON.stringify(usuario.value))
+    } catch {}
+  }
+
+  function setFirma(url) {
+    if (usuario.value) {
+      usuario.value = { ...usuario.value, firma_url: url }
+      localStorage.setItem('usuario', JSON.stringify(usuario.value))
+    }
   }
 
   async function logout() {
@@ -29,5 +60,5 @@ export const useAuthStore = defineStore('auth', () => {
     localStorage.removeItem('usuario')
   }
 
-  return { token, usuario, isAuthenticated, isSupervisor, login, logout, clearSession }
+  return { token, usuario, isAuthenticated, isSupervisor, login, fetchMe, setFirma, logout, clearSession }
 })

@@ -18,6 +18,9 @@ class Orden extends Model
         'anticipo_pct',
         'notas',
         'factura_foto_url',
+        'firma_url',
+        'direccion_envio',
+        'ciudad_envio',
     ];
 
     protected function casts(): array

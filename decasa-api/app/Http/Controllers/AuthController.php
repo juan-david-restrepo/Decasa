@@ -30,9 +30,11 @@ class AuthController extends Controller
 
         return response()->json([
             'token'             => $token,
+            'id'                => $usuario->id,
             'nombre'            => $usuario->nombre,
             'rol'               => $usuario->rol,
             'tienda_default_id' => $usuario->tienda_default_id,
+            'firma_url'         => $usuario->firma_url,
         ]);
     }
 
@@ -54,6 +56,14 @@ class AuthController extends Controller
             'rol'               => $usuario->rol,
             'tienda_default_id' => $usuario->tienda_default_id,
             'tienda_default'    => $usuario->tiendaDefault,
+            'firma_url'         => $usuario->firma_url,
         ]);
+    }
+
+    public function guardarFirma(Request $request)
+    {
+        $data = $request->validate(['firma_url' => 'required|string|max:500']);
+        $request->user()->update(['firma_url' => $data['firma_url']]);
+        return response()->json(['firma_url' => $data['firma_url']]);
     }
 }

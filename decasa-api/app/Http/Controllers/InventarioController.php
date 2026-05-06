@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Events\InventarioActualizado;
 use App\Models\Inventario;
 use App\Models\InventarioMovimiento;
 use Illuminate\Http\Request;
@@ -159,6 +160,8 @@ class InventarioController extends Controller
                 'usuario_id'  => $request->user()->id,
             ]);
         });
+
+        event(new InventarioActualizado((int) $data['tienda_id'], (int) $data['producto_id'], 'entrada'));
 
         $inv = Inventario::with('producto:id,nombre,categoria')
             ->where('producto_id', $data['producto_id'])

@@ -3,6 +3,7 @@
 namespace App\Jobs;
 
 use App\Models\Produccion;
+use App\Services\NotificacionService;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -40,6 +41,20 @@ class AlertarRetrasoProduccion implements ShouldQueue, ShouldBeUnique
             $producto = $prod->ordenItem->producto->nombre;
             $dias    = now()->diffInDays($prod->fecha_compromiso);
 
+            NotificacionService::crear(
+                'retrasado',
+                'Producción retrasada',
+                "{$producto} — {$cliente} · {$dias} día(s) de retraso",
+                ['produccion_id' => $prod->id, 'orden_id' => $orden->id],
+            );
+            NotificacionService::crear(
+                'retrasado',
+                'Tu pedido está atrasado',
+                "{$producto} para {$cliente} · {$dias} día(s) de retraso",
+                ['produccion_id' => $prod->id, 'orden_id' => $orden->id],
+                $orden->vendedor_id,
+            );
+
             Log::warning("[DECASA] Producción #{$prod->id} RETRASADA", [
                 'producto'        => $producto,
                 'cliente'         => $cliente,
@@ -69,6 +84,21 @@ class AlertarRetrasoProduccion implements ShouldQueue, ShouldBeUnique
 
             $orden   = $prod->ordenItem->orden;
             $cliente = $orden->cliente->nombre;
+            $diasLabel = $diasRestantes === 0 ? 'hoy' : "en {$diasRestantes} día(s)";
+
+            NotificacionService::crear(
+                'por_vencer',
+                "Entrega próxima ({$diasRestantes}d)",
+                "{$prod->ordenItem->producto->nombre} para {$cliente} — vence {$diasLabel}",
+                ['produccion_id' => $prod->id, 'orden_id' => $orden->id, 'dias_restantes' => $diasRestantes],
+            );
+            NotificacionService::crear(
+                'por_vencer',
+                'Tu pedido vence pronto',
+                "{$prod->ordenItem->producto->nombre} para {$cliente} — vence {$diasLabel}",
+                ['produccion_id' => $prod->id, 'orden_id' => $orden->id, 'dias_restantes' => $diasRestantes],
+                $orden->vendedor_id,
+            );
 
             Log::info("[DECASA] Producción #{$prod->id} vence en {$diasRestantes} día(s)", [
                 'producto'        => $prod->ordenItem->producto->nombre,
