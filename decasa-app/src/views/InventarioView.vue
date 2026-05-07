@@ -1,4 +1,4 @@
-<script setup>
+﻿<script setup>
 import { ref, computed, onMounted, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
@@ -260,6 +260,15 @@ async function guardarStock() {
   }
 }
 
+// ── Categorías que admiten variantes de tela/color ───────────────────────────
+// Incluye formas con y sin tilde para cubrir cualquier escritura en la BD
+const KEYWORDS_TAPIZADOS = ['sofa', 'sofá', 'silla', 'sillón', 'sillon']
+
+function esTapizado(item) {
+  const cat = (item.producto?.categoria ?? '').toLowerCase().trim()
+  return KEYWORDS_TAPIZADOS.some(k => cat.includes(k))
+}
+
 // ── Variantes ─────────────────────────────────────────────────────────────────
 const variantesAbiertas  = ref({})   // { producto_id: bool }
 const variantesData      = ref({})   // { producto_id: Variante[] }
@@ -473,7 +482,7 @@ onMounted(async () => {
     </div>
 
     <!-- Loading -->
-    <div v-if="tiendaId && loading" class="text-center py-12 text-gray-400">Cargando...</div>
+    <AppSpinner v-if="tiendaId && loading" />
 
     <!-- Empty -->
     <EmptyState
@@ -560,8 +569,8 @@ onMounted(async () => {
             </span>
           </div>
 
-          <!-- Variantes tela/color -->
-          <div v-if="!esVistaGlobal" class="border-t border-gray-100 pt-2">
+          <!-- Variantes tela/color — solo productos tapizados -->
+          <div v-if="!esVistaGlobal && esTapizado(item)" class="border-t border-gray-100 pt-2">
             <button
               @click="toggleVariantes(item)"
               class="text-xs text-blue-600 font-medium flex items-center gap-1"
@@ -670,26 +679,31 @@ onMounted(async () => {
             <div>
               <label class="block text-sm font-medium text-gray-700 mb-2">Foto del producto</label>
               <input ref="fotoInput" type="file" accept="image/*" class="hidden" @change="onFotoChange" />
-              <div class="flex items-center gap-4">
-                <!-- Preview / placeholder clickeable -->
-                <button
-                  type="button"
-                  @click="fotoInput.click()"
-                  class="flex-shrink-0 w-20 h-20 rounded-xl overflow-hidden bg-gray-100 border-2 border-dashed border-gray-300 flex items-center justify-center hover:border-blue-400 transition-colors"
-                >
-                  <img v-if="fotoPreviewUrl" :src="fotoPreviewUrl" class="w-full h-full object-cover" />
-                  <PhotoIcon v-else class="w-8 h-8 text-gray-300" />
-                </button>
-                <!-- Acciones -->
-                <div>
-                  <button type="button" @click="fotoInput.click()" class="text-sm text-blue-600 font-medium hover:underline block">
-                    {{ fotoFile ? 'Cambiar foto' : 'Seleccionar foto' }}
+
+              <!-- Preview grande cuando hay foto seleccionada -->
+              <div v-if="fotoPreviewUrl" class="space-y-2">
+                <div class="relative rounded-xl overflow-hidden border-2 border-blue-300 bg-gray-50">
+                  <img :src="fotoPreviewUrl" alt="Vista previa" class="w-full object-contain" style="max-height: 220px;" />
+                  <button
+                    type="button"
+                    @click="quitarFoto"
+                    class="absolute top-2 right-2 bg-red-500 text-white rounded-full p-1.5 shadow-lg"
+                  >
+                    <XMarkIcon class="w-4 h-4" />
                   </button>
-                  <p v-if="fotoFile" class="text-xs text-gray-500 mt-0.5 max-w-[160px] truncate">{{ fotoFile.name }}</p>
-                  <p v-else class="text-xs text-gray-400 mt-0.5">JPG, PNG, WEBP · máx 5 MB</p>
-                  <button v-if="fotoFile" type="button" @click="quitarFoto" class="text-xs text-red-500 mt-1 hover:underline">Quitar</button>
+                </div>
+                <div class="flex items-center justify-between">
+                  <p class="text-xs text-gray-500 truncate max-w-[200px]">{{ fotoFile?.name }}</p>
+                  <button type="button" @click="fotoInput.click()" class="text-xs text-blue-600 font-medium hover:underline">Cambiar</button>
                 </div>
               </div>
+
+              <!-- Placeholder cuando no hay foto -->
+              <button v-else type="button" @click="fotoInput.click()" class="w-full flex flex-col items-center gap-2 border-2 border-dashed border-gray-300 rounded-xl p-6 cursor-pointer hover:border-blue-400 hover:bg-blue-50 transition-colors">
+                <PhotoIcon class="w-8 h-8 text-gray-300" />
+                <span class="text-sm text-gray-500">Toca para seleccionar foto</span>
+                <span class="text-xs text-gray-400">JPG, PNG, WEBP · máx 5 MB</span>
+              </button>
             </div>
 
             <!-- Descripción -->

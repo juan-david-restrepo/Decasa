@@ -1,4 +1,4 @@
-<script setup>
+﻿<script setup>
 import { ref, onMounted, onUnmounted, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import {
@@ -8,9 +8,9 @@ import {
   IdentificationIcon,
   PlusIcon,
   UserGroupIcon,
+  ArrowDownTrayIcon,
 } from '@heroicons/vue/24/outline'
-import { getClientes, createCliente, updateCliente } from '@/api/clientes'
-import { CATEGORIAS_DISPONIBLES } from '@/api/clientes'
+import { getClientes, createCliente, updateCliente, exportarClientes, CATEGORIAS_DISPONIBLES } from '@/api/clientes'
 import EmptyState from '@/components/common/EmptyState.vue'
 
 const router = useRouter()
@@ -29,6 +29,18 @@ let observer = null
 const mostrarCrear = ref(false)
 const formError = ref('')
 const creando = ref(false)
+const exportando = ref(false)
+
+async function exportar() {
+  exportando.value = true
+  try {
+    await exportarClientes({ tipo: filtroTipo.value, search: busqueda.value })
+  } catch (e) {
+    console.error('Error al exportar:', e)
+  } finally {
+    exportando.value = false
+  }
+}
 const nuevo = ref({
   nombre: '',
   cedula: '',
@@ -176,6 +188,15 @@ onUnmounted(() => {
     <div class="flex items-center gap-2">
       <h2 class="text-lg font-bold text-gray-800 flex-1">Clientes</h2>
       <button
+        @click="exportar"
+        :disabled="exportando || loading"
+        class="text-sm text-green-600 font-medium px-3 py-1.5 rounded-lg border border-green-200 hover:bg-green-50 transition-colors flex items-center gap-1 disabled:opacity-50"
+        :title="`Exportar ${filtroTipo === 'oficial' ? 'oficiales' : filtroTipo === 'interesado' ? 'interesados' : 'todos'} a Excel`"
+      >
+        <ArrowDownTrayIcon class="w-4 h-4" />
+        {{ exportando ? 'Exportando...' : 'Excel' }}
+      </button>
+      <button
         @click="abrirCrear"
         class="text-sm text-blue-600 font-medium px-3 py-1.5 rounded-lg border border-blue-200 hover:bg-blue-50 transition-colors flex items-center gap-1"
       >
@@ -211,7 +232,7 @@ onUnmounted(() => {
     </div>
 
     <!-- Loading -->
-    <div v-if="loading" class="text-center py-12 text-gray-400">Cargando...</div>
+    <AppSpinner v-if="loading" />
 
     <!-- Empty -->
     <EmptyState

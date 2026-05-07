@@ -52,9 +52,13 @@ class ProduccionController extends Controller
             ->orderBy('fecha_compromiso')
             ->paginate(20)
             ->through(function ($p) {
-                $hoy = now()->startOfDay();
-                $compromiso = \Carbon\Carbon::parse($p->fecha_compromiso)->startOfDay();
-                $p->dias_restantes = $hoy->diffInDays($compromiso, false);
+                if ($p->fecha_compromiso) {
+                    $hoy = now()->startOfDay();
+                    $compromiso = \Carbon\Carbon::parse($p->fecha_compromiso)->startOfDay();
+                    $p->dias_restantes = $hoy->diffInDays($compromiso, false);
+                } else {
+                    $p->dias_restantes = null;
+                }
                 return $p;
             });
 
@@ -81,7 +85,7 @@ class ProduccionController extends Controller
         }
 
         $data = $request->validate([
-            'estado'         => 'required|in:pendiente,en_proceso,listo,retrasado,entregado',
+            'estado'         => 'required|in:pendiente,en_proceso,listo,retrasado,entregado,cancelado',
             'motivo_retraso' => 'nullable|string|max:500',
         ]);
 
@@ -103,6 +107,24 @@ class ProduccionController extends Controller
         }
 
         $produccion->update($updates);
+
+        // Sincronizar estado de la orden según todos sus ítems de producción
+        $orden = $produccion->ordenItem->orden;
+        $orden->loadMissing('items.produccion');
+
+        $estadosProduccion = $orden->items
+            ->map(fn($item) => optional($item->produccion)->estado)
+            ->filter();
+
+        if ($estadosProduccion->isNotEmpty()) {
+            if ($estadosProduccion->every(fn($e) => $e === 'entregado')) {
+                $orden->update(['estado' => 'entregado']);
+            } elseif ($estadosProduccion->every(fn($e) => in_array($e, ['listo', 'entregado']))) {
+                $orden->update(['estado' => 'listo_entrega']);
+            } else {
+                $orden->update(['estado' => 'en_produccion']);
+            }
+        }
 
         event(new ProduccionActualizada(
             $produccion->id,
@@ -155,9 +177,13 @@ class ProduccionController extends Controller
         }
 
         // Recalcular dias_restantes en la respuesta
-        $hoy        = now()->startOfDay();
-        $compromiso = \Carbon\Carbon::parse($produccion->fecha_compromiso)->startOfDay();
-        $produccion->dias_restantes = $hoy->diffInDays($compromiso, false);
+        if ($produccion->fecha_compromiso) {
+            $hoy        = now()->startOfDay();
+            $compromiso = \Carbon\Carbon::parse($produccion->fecha_compromiso)->startOfDay();
+            $produccion->dias_restantes = $hoy->diffInDays($compromiso, false);
+        } else {
+            $produccion->dias_restantes = null;
+        }
 
         return response()->json($produccion);
     }

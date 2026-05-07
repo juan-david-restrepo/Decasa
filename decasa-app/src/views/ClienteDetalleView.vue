@@ -1,4 +1,4 @@
-<script setup>
+﻿<script setup>
 import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
@@ -163,7 +163,7 @@ onMounted(async () => {
     </div>
 
     <!-- Loading -->
-    <div v-if="loading" class="text-center py-12 text-gray-400">Cargando...</div>
+    <AppSpinner v-if="loading" />
 
     <!-- Error -->
     <div v-else-if="error" class="bg-red-50 rounded-xl px-4 py-3 text-sm text-red-600">

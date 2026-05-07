@@ -1,6 +1,7 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { useAuthStore } from '@/stores/auth'
+import { useRouter } from 'vue-router'
 import {
   MagnifyingGlassIcon,
   FunnelIcon,
@@ -8,13 +9,17 @@ import {
   ClockIcon,
   ExclamationTriangleIcon,
   XCircleIcon,
+  NoSymbolIcon,
 } from '@heroicons/vue/24/outline'
 import { getProduccion, updateProduccion } from '@/api/produccion'
+import { useToast } from '@/composables/useToast'
 import { getTiendas } from '@/api/ordenes'
 import { useRealtime } from '@/composables/useRealtime'
 import EmptyState from '@/components/common/EmptyState.vue'
 
-const auth = useAuthStore()
+const auth   = useAuthStore()
+const router = useRouter()
+const toast  = useToast()
 
 const producciones = ref([])
 const tiendas = ref([])
@@ -37,7 +42,6 @@ const mostrarModal = ref(false)
 const produccionSeleccionada = ref(null)
 const nuevoEstado = ref('')
 const motivoRetraso = ref('')
-const modalError = ref('')
 const modalLoading = ref(false)
 
 const estadosOpts = [
@@ -47,9 +51,13 @@ const estadosOpts = [
   { value: 'listo',      label: 'Listo' },
   { value: 'retrasado',  label: 'Retrasado' },
   { value: 'entregado',  label: 'Entregado' },
+  { value: 'cancelado',  label: 'Cancelado' },
 ]
 
 function badgeInfo(p) {
+  if (p.estado === 'cancelado') {
+    return { label: 'Cancelado', cls: 'bg-gray-100 text-gray-500' }
+  }
   if (p.estado === 'pendiente') {
     return { label: 'Pendiente', cls: 'bg-yellow-100 text-yellow-700' }
   }
@@ -65,6 +73,7 @@ function badgeInfo(p) {
 }
 
 function estadoIcon(p) {
+  if (p.estado === 'cancelado') return NoSymbolIcon
   if (p.estado === 'entregado' || p.estado === 'listo') return CheckCircleIcon
   if (p.estado === 'retrasado' || (p.estado === 'en_proceso' && p.dias_restantes !== null && p.dias_restantes < 0)) return ExclamationTriangleIcon
   return ClockIcon
@@ -132,15 +141,13 @@ function openModal(p) {
   produccionSeleccionada.value = p
   nuevoEstado.value = p.estado
   motivoRetraso.value = ''
-  modalError.value = ''
   mostrarModal.value = true
 }
 
 async function guardarEstado() {
-  modalError.value = ''
   if (!nuevoEstado.value) return
   if (nuevoEstado.value === 'retrasado' && !motivoRetraso.value.trim()) {
-    modalError.value = 'Debes indicar el motivo del retraso.'
+    toast.error('Debes indicar el motivo del retraso.')
     return
   }
 
@@ -155,15 +162,43 @@ async function guardarEstado() {
     await fetchProduccion(1, false)
     setupObserver()
   } catch (e) {
-    modalError.value = e.response?.data?.message ?? 'Error al actualizar el estado.'
+    toast.error(e.response?.data?.message ?? 'Error al actualizar el estado.')
   } finally {
     modalLoading.value = false
   }
 }
 
+function diasInfo(p) {
+  const d = p.dias_restantes
+  if (d === null || d === undefined) return null
+
+  // Días totales del período (inicio → compromiso)
+  const inicio = new Date(String(p.fecha_inicio).substring(0, 10) + 'T00:00:00')
+  const fin    = new Date(String(p.fecha_compromiso).substring(0, 10) + 'T00:00:00')
+  const total  = Math.max(1, Math.round((fin - inicio) / 86400000))
+  const mitad  = total / 2
+
+  let cls, texto
+  if (d <= 0) {
+    cls   = 'bg-red-100 text-red-700'
+    texto = d === 0 ? 'Vence hoy' : `${Math.abs(d)} día${Math.abs(d) !== 1 ? 's' : ''} de retraso`
+  } else if (d <= 5) {
+    cls   = 'bg-red-100 text-red-700'
+    texto = `${d} día${d !== 1 ? 's' : ''} restante${d !== 1 ? 's' : ''}`
+  } else if (d < mitad) {
+    cls   = 'bg-yellow-100 text-yellow-700'
+    texto = `${d} días restantes`
+  } else {
+    cls   = 'bg-green-100 text-green-700'
+    texto = `${d} días restantes`
+  }
+
+  return { cls, texto }
+}
+
 function formatFecha(dateStr) {
   if (!dateStr) return '—'
-  const d = new Date(dateStr + 'T00:00:00')
+  const d = new Date(String(dateStr).substring(0, 10) + 'T00:00:00')
   return d.toLocaleDateString('es-CO', { day: '2-digit', month: 'short', year: 'numeric' })
 }
 
@@ -254,7 +289,7 @@ onUnmounted(() => {
     </div>
 
     <!-- Loading -->
-    <div v-if="loading" class="text-center py-12 text-gray-400">Cargando...</div>
+    <AppSpinner v-if="loading" />
 
     <!-- Empty -->
     <EmptyState
@@ -268,7 +303,8 @@ onUnmounted(() => {
         <li
           v-for="p in producciones"
           :key="p.id"
-          class="bg-white rounded-xl shadow-sm p-4 space-y-2"
+          class="bg-white rounded-xl shadow-sm p-4 space-y-2 cursor-pointer active:scale-[0.99] transition-transform"
+          @click="router.push({ name: 'orden-detalle', params: { id: p.orden_item?.orden?.id } })"
         >
           <!-- Producto + badge de días -->
           <div class="flex justify-between items-start">
@@ -304,14 +340,18 @@ onUnmounted(() => {
             </div>
           </div>
 
-          <!-- Fechas -->
+          <!-- Fechas + días restantes -->
           <div class="flex justify-between items-center text-xs pt-1 border-t border-gray-100">
             <span class="text-gray-400">Compromiso: <span class="font-medium text-gray-600">{{ formatFecha(p.fecha_compromiso) }}</span></span>
-            <span :class="['font-medium', badgeInfo(p).cls]">{{ badgeInfo(p).label }}</span>
+            <span
+              v-if="p.estado !== 'entregado' && diasInfo(p)"
+              :class="['inline-block px-2 py-0.5 rounded-full font-semibold', diasInfo(p).cls]"
+            >{{ diasInfo(p).texto }}</span>
+            <span v-else-if="p.estado === 'entregado'" class="text-gray-400 italic">Entregado</span>
           </div>
           <button
-            v-if="auth.isSupervisor && p.estado !== 'entregado'"
-            @click="openModal(p)"
+            v-if="auth.isSupervisor && !['entregado', 'cancelado'].includes(p.estado)"
+            @click.stop="openModal(p)"
             class="w-full mt-2 text-blue-600 text-xs font-medium text-center py-1.5 rounded-lg border border-blue-200 hover:bg-blue-50 transition-colors"
           >
             Cambiar estado
@@ -347,6 +387,7 @@ onUnmounted(() => {
               <option value="listo">Listo para entrega</option>
               <option value="retrasado">Retrasado</option>
               <option value="entregado">Entregado</option>
+              <option value="cancelado">Cancelado</option>
             </select>
           </div>
 
@@ -359,8 +400,6 @@ onUnmounted(() => {
               placeholder="Explica por qué se retrasó este pedido..."
             />
           </div>
-
-          <p v-if="modalError" class="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{{ modalError }}</p>
 
           <div class="flex gap-3">
             <button @click="mostrarModal = false" class="flex-1 bg-gray-100 text-gray-700 rounded-lg py-2.5 text-sm font-semibold">Cancelar</button>

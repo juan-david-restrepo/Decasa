@@ -19,6 +19,7 @@ class OrdenItem extends Model
         'precio_unitario',
         'es_personalizado',
         'specs_personalizacion',
+        'boceto_url',
         'fecha_entrega_prom',
     ];
 

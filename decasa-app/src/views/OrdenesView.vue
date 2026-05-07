@@ -1,7 +1,8 @@
-<script setup>
+﻿<script setup>
 import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
-import { MagnifyingGlassIcon } from '@heroicons/vue/24/outline'
+import { MagnifyingGlassIcon, Cog6ToothIcon } from '@heroicons/vue/24/outline'
+import { XMarkIcon } from '@heroicons/vue/24/solid'
 import { getOrdenes, getTiendas } from '@/api/ordenes'
 import { useRealtime } from '@/composables/useRealtime'
 import BadgeEstado from '@/components/common/BadgeEstado.vue'
@@ -157,7 +158,9 @@ onUnmounted(() => {
         @click="showFilters = !showFilters"
         class="text-sm text-blue-600 font-medium px-3 py-1.5 rounded-lg border border-blue-200 hover:bg-blue-50 transition-colors"
       >
-        {{ showFilters ? '✕ Cerrar' : '⚙ Filtros' }}
+        <XMarkIcon v-if="showFilters" class="w-4 h-4 inline-block mr-1" />
+        <Cog6ToothIcon v-else class="w-4 h-4 inline-block mr-1" />
+        {{ showFilters ? 'Cerrar' : 'Filtros' }}
       </button>
     </div>
 
@@ -231,7 +234,7 @@ onUnmounted(() => {
     </div>
 
     <!-- Loading inicial -->
-    <div v-if="loading" class="text-center py-12 text-gray-400">Cargando...</div>
+    <AppSpinner v-if="loading" />
 
     <!-- Empty state -->
     <EmptyState

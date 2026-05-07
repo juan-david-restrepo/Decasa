@@ -6,4 +6,8 @@ export const updateEstado = (id, estado) => api.patch(`/ordenes/${id}/estado`, {
 export const getPagos = (id) => api.get(`/ordenes/${id}/pagos`)
 export const registrarPago = (id, data) => api.post(`/ordenes/${id}/pagos`, data)
 export const descargarPdfOrden = (id) => api.get(`/ordenes/${id}/pdf`, { responseType: 'blob' })
+export const reenviarCotizacion = (id, email = null) =>
+  api.post(`/ordenes/${id}/reenviar-cotizacion`, email ? { email } : {})
+export const asignarFechasEntrega = (id, items) =>
+  api.patch(`/ordenes/${id}/fechas-entrega`, { items })
 export const getTiendas = () => api.get('/tiendas')

@@ -10,8 +10,12 @@
     <table style="width: 100%; border-bottom: 2px solid #2563eb; padding-bottom: 10px; margin-bottom: 20px;">
         <tr>
             <td style="vertical-align: middle;">
-                <h1 style="font-size: 24px; font-weight: bold; color: #2563eb; margin: 0;">DECASA</h1>
-                <p style="font-size: 10px; color: #666; margin: 2px 0 0 0;">Sistema de Órdenes</p>
+                @if(!empty($logoBase64))
+                    <img src="{{ $logoBase64 }}" style="height: 50px; max-width: 180px; object-fit: contain;" alt="Decasa">
+                @else
+                    <h1 style="font-size: 24px; font-weight: bold; color: #2563eb; margin: 0;">DECASA</h1>
+                    <p style="font-size: 10px; color: #666; margin: 2px 0 0 0;">Sistema de Órdenes</p>
+                @endif
             </td>
             <td style="text-align: right; vertical-align: middle;">
                 <h2 style="font-size: 18px; font-weight: bold; margin: 0;">Orden #{{ $orden->id }}</h2>
@@ -149,6 +153,31 @@
             </tfoot>
         </table>
     </div>
+
+    <!-- Detalles de Personalización -->
+    @php $itemsPersonalizados = $orden->items->where('es_personalizado', true); @endphp
+    @if($itemsPersonalizados->isNotEmpty())
+    <div style="margin-bottom: 20px; border: 1px solid #ede9fe; border-radius: 8px; padding: 16px; background-color: #faf5ff;">
+        <p style="font-size: 10px; font-weight: bold; color: #7c3aed; text-transform: uppercase; margin: 0 0 12px 0;">✦ Detalles de Personalización</p>
+        @foreach($itemsPersonalizados as $item)
+            @php $specs = $item->specs_personalizacion ?? []; @endphp
+            <div style="margin-bottom: 12px; padding-bottom: 12px; border-bottom: 1px solid #ede9fe;">
+                <p style="font-size: 11px; font-weight: bold; color: #374151; margin: 0 0 6px 0;">
+                    {{ $item->producto->nombre ?? 'Producto' }}
+                    <span style="color: #7c3aed; font-weight: normal; font-size: 10px;">(ítem personalizado)</span>
+                </p>
+                @if(!empty($specs['descripcion']))
+                    <p style="font-size: 10px; font-weight: bold; color: #6b7280; margin: 0 0 2px 0;">Especificaciones / Medidas:</p>
+                    <p style="font-size: 11px; color: #374151; margin: 0 0 8px 0; white-space: pre-wrap;">{{ $specs['descripcion'] }}</p>
+                @endif
+                @if(!empty($bocetosBase64[$item->id]))
+                    <p style="font-size: 10px; font-weight: bold; color: #6b7280; margin: 0 0 4px 0;">Boceto del vendedor:</p>
+                    <img src="{{ $bocetosBase64[$item->id] }}" style="max-width: 100%; max-height: 220px; border: 1px solid #e5e7eb; border-radius: 6px; display: block;" alt="Boceto" />
+                @endif
+            </div>
+        @endforeach
+    </div>
+    @endif
 
     <!-- Historial de Pagos -->
     <div style="margin-bottom: 20px;">

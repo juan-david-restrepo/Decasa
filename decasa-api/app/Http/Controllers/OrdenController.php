@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Events\InventarioActualizado;
 use App\Events\OrdenActualizada;
+use App\Mail\CotizacionMail;
 use App\Services\NotificacionService;
 use App\Models\Inventario;
 use App\Models\Usuario;
@@ -16,6 +17,7 @@ use App\Models\ProductoVariante;
 use Barryvdh\DomPDF\Facade\Pdf;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Mail;
 
 class OrdenController extends Controller
 {
@@ -96,8 +98,16 @@ class OrdenController extends Controller
             'items.*.precio_unitario'            => 'required|numeric|min:0',
             'items.*.es_personalizado'           => 'nullable|boolean',
             'items.*.specs_personalizacion'      => 'nullable|array',
-            'items.*.fecha_entrega_prometida'    => 'required|date',
+            'items.*.boceto_url'                 => 'nullable|string|max:500',
+            'items.*.fecha_entrega_prometida'    => 'nullable|date',
         ]);
+
+        // Vendedor debe tener firma registrada antes de crear órdenes
+        if ($request->user()->rol === 'vendedor' && ! $request->user()->firma_url) {
+            return response()->json([
+                'message' => 'Debes registrar tu firma en Mi Perfil antes de crear órdenes.',
+            ], 422);
+        }
 
         $tiendaId   = $data['tienda_id'];
         $anticupoPct = $data['anticipo_pct'] ?? 50;
@@ -202,14 +212,15 @@ class OrdenController extends Controller
                     'precio_unitario'       => $itemData['precio_unitario'],
                     'es_personalizado'      => $esPersonalizado,
                     'specs_personalizacion' => $specsExtra,
-                    'fecha_entrega_prom'    => $itemData['fecha_entrega_prometida'],
+                    'boceto_url'            => $itemData['boceto_url'] ?? null,
+                    'fecha_entrega_prom'    => $itemData['fecha_entrega_prometida'] ?? null,
                 ]);
 
                 if ($esPersonalizado) {
                     Produccion::create([
                         'orden_item_id'    => $item->id,
                         'fecha_inicio'     => now()->toDateString(),
-                        'fecha_compromiso' => $itemData['fecha_entrega_prometida'],
+                        'fecha_compromiso' => $itemData['fecha_entrega_prometida'] ?? null,
                         'estado'           => 'pendiente',
                     ]);
                 } else {
@@ -276,6 +287,15 @@ class OrdenController extends Controller
             ['orden_id' => $orden->id, 'tienda_id' => (int) $tiendaId, 'valor_total' => $valorTotal],
         );
 
+        // Notificar al supervisor que debe asignar fecha de entrega
+        NotificacionService::crear(
+            'asignar_fecha',
+            'Asignar fecha de entrega',
+            "Orden #{$orden->id} de {$ordenCargada->cliente->nombre} necesita fecha de entrega",
+            ['orden_id' => $orden->id],
+            // usuario_id null → va al supervisor
+        );
+
         // Notificar cambio de inventario y detectar ventas cruzadas
         $origenesExternos = [];
         foreach ($data['items'] as $itemData) {
@@ -307,7 +327,42 @@ class OrdenController extends Controller
             }
         }
 
+        // Enviar cotización por email si el cliente tiene email
+        if ($ordenCargada->cliente->email) {
+            try {
+                Mail::to($ordenCargada->cliente->email)
+                    ->send(new CotizacionMail($orden->id));
+            } catch (\Throwable) {
+                // El email nunca bloquea la respuesta
+            }
+        }
+
         return response()->json($ordenCargada, 201);
+    }
+
+    /**
+     * POST /api/ordenes/{id}/reenviar-cotizacion
+     * Re-envía la cotización por email al cliente.
+     */
+    public function reenviarCotizacion(Request $request, int $id)
+    {
+        $usuario = $request->user();
+
+        $orden = Orden::with('cliente:id,nombre,email')->findOrFail($id);
+
+        if ($usuario->rol === 'vendedor' && $orden->vendedor_id !== $usuario->id) {
+            return response()->json(['message' => 'No autorizado.'], 403);
+        }
+
+        $email = $request->input('email') ?? $orden->cliente->email;
+
+        if (! $email) {
+            return response()->json(['message' => 'El cliente no tiene email registrado.'], 422);
+        }
+
+        Mail::to($email)->send(new CotizacionMail($orden->id));
+
+        return response()->json(['message' => "Cotización enviada a {$email}."]);
     }
 
     /**
@@ -351,11 +406,11 @@ class OrdenController extends Controller
             'estado' => 'required|in:pendiente_anticipo,en_produccion,listo_entrega,entregado,cancelado',
         ]);
 
-        $orden = Orden::with('items')->findOrFail($id);
-
-        if ($usuario->rol === 'vendedor' && $orden->vendedor_id !== $usuario->id) {
-            return response()->json(['message' => 'No autorizado.'], 403);
+        if ($usuario->rol === 'vendedor') {
+            return response()->json(['message' => 'Solo el supervisor puede cambiar el estado de las órdenes.'], 403);
         }
+
+        $orden = Orden::with('items')->findOrFail($id);
 
         $estadoAnterior = $orden->estado;
         $estadoNuevo    = $data['estado'];
@@ -490,6 +545,47 @@ class OrdenController extends Controller
     }
 
     /**
+     * PATCH /api/ordenes/{id}/fechas-entrega
+     * Solo supervisor. Asigna fecha de entrega a cada ítem y notifica al vendedor.
+     */
+    public function asignarFechas(Request $request, int $id)
+    {
+        $data = $request->validate([
+            'items'         => 'required|array|min:1',
+            'items.*.id'    => 'required|integer|exists:orden_items,id',
+            'items.*.fecha' => 'required|date',
+        ]);
+
+        $orden = Orden::with(['items', 'cliente:id,nombre', 'vendedor:id,nombre'])->findOrFail($id);
+
+        DB::transaction(function () use ($data, $orden) {
+            foreach ($data['items'] as $itemData) {
+                $orden->items()
+                    ->where('id', $itemData['id'])
+                    ->update(['fecha_entrega_prom' => $itemData['fecha']]);
+
+                // Sincronizar fecha_compromiso en producción si existe
+                $item = $orden->items->firstWhere('id', $itemData['id']);
+                if ($item) {
+                    \App\Models\Produccion::where('orden_item_id', $item->id)
+                        ->update(['fecha_compromiso' => $itemData['fecha']]);
+                }
+            }
+        });
+
+        // Notificar al vendedor que ya tiene fecha de entrega
+        NotificacionService::crear(
+            'fecha_asignada',
+            'Fecha de entrega asignada',
+            "La orden #{$orden->id} de {$orden->cliente->nombre} ya tiene fecha de entrega",
+            ['orden_id' => $orden->id],
+            $orden->vendedor_id,
+        );
+
+        return response()->json(['message' => 'Fechas asignadas correctamente.']);
+    }
+
+    /**
      * GET /api/ordenes/{id}/pdf
      */
     public function pdf(Request $request, int $id)
@@ -518,7 +614,18 @@ class OrdenController extends Controller
         $firmaCliente = $this->urlToBase64($orden->firma_url);
         $firmaVendedor = $this->urlToBase64($orden->vendedor?->firma_url);
 
-        $pdf = Pdf::loadView('pdf.orden', compact('orden', 'firmaCliente', 'firmaVendedor'));
+        // Logo: leer AVIF y convertir a PNG base64 para DomPDF
+        $logoBase64 = $this->avifToPngBase64(public_path('img/logo.avif'));
+
+        // Bocetos de ítems personalizados: convertir URLs a base64
+        $bocetosBase64 = [];
+        foreach ($orden->items as $item) {
+            if ($item->es_personalizado && $item->boceto_url) {
+                $bocetosBase64[$item->id] = $this->urlToBase64($item->boceto_url);
+            }
+        }
+
+        $pdf = Pdf::loadView('pdf.orden', compact('orden', 'firmaCliente', 'firmaVendedor', 'logoBase64', 'bocetosBase64'));
         $pdf->setPaper('letter');
 
         return $pdf->download('orden-' . $orden->id . '.pdf');
@@ -533,6 +640,21 @@ class OrdenController extends Controller
                 'ssl'  => ['verify_peer' => false],
             ]));
             return $bytes ? 'data:image/png;base64,' . base64_encode($bytes) : null;
+        } catch (\Throwable) {
+            return null;
+        }
+    }
+
+    private function avifToPngBase64(string $path): ?string
+    {
+        if (! file_exists($path)) return null;
+        try {
+            $img = imagecreatefromavif($path);
+            ob_start();
+            imagepng($img);
+            $data = ob_get_clean();
+            imagedestroy($img);
+            return 'data:image/png;base64,' . base64_encode($data);
         } catch (\Throwable) {
             return null;
         }

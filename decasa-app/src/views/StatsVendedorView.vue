@@ -1,4 +1,4 @@
-<script setup>
+﻿<script setup>
 import { ref, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import { Chart } from 'chart.js/auto'
@@ -264,7 +264,7 @@ onBeforeUnmount(() => {
     </div>
 
     <!-- Loading -->
-    <div v-if="loading" class="text-center py-12 text-gray-400 text-sm">Cargando...</div>
+    <AppSpinner v-if="loading" />
 
     <template v-else-if="stats">
 

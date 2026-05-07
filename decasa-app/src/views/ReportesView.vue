@@ -1,4 +1,4 @@
-<script setup>
+﻿<script setup>
 import { ref, onMounted, onBeforeUnmount, nextTick, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { Chart } from 'chart.js/auto'
@@ -11,6 +11,7 @@ import api from '@/api'
 import MoneyDisplay from '@/components/common/MoneyDisplay.vue'
 import BadgeEstado from '@/components/common/BadgeEstado.vue'
 import { useAuthStore } from '@/stores/auth'
+import { StarIcon } from '@heroicons/vue/24/solid'
 
 const router = useRouter()
 const auth = useAuthStore()
@@ -351,7 +352,7 @@ onBeforeUnmount(() => {
     </div>
 
     <!-- Loading -->
-    <div v-if="loading" class="text-center py-12 text-gray-400 text-sm">Cargando...</div>
+    <AppSpinner v-if="loading" />
 
     <template v-else>
 
@@ -496,7 +497,7 @@ onBeforeUnmount(() => {
               </div>
             </div>
             <div v-if="t.vendedor_destacado" class="mt-3 text-xs text-gray-500 flex items-center gap-1">
-              <span class="text-yellow-500">★</span>
+              <StarIcon class="w-4 h-4 text-yellow-500 inline-block" />
               <span>{{ t.vendedor_destacado.nombre }}</span>
               <span class="text-gray-400">— {{ cop(t.vendedor_destacado.ingresos) }}</span>
             </div>

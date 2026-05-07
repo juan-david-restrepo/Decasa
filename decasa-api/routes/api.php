@@ -36,18 +36,21 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::patch('/productos/{id}', [ProductoController::class, 'update']);
 
     // Clientes
-    Route::get('/clientes',              [ClienteController::class, 'index']);
-    Route::post('/clientes',             [ClienteController::class, 'store']);
-    Route::get('/clientes/{id}',         [ClienteController::class, 'show']);
-    Route::put('/clientes/{id}',         [ClienteController::class, 'update']);
-    Route::get('/clientes/{id}/ordenes', [ClienteController::class, 'ordenes']);
+    Route::get('/clientes',               [ClienteController::class, 'index']);
+    Route::post('/clientes',              [ClienteController::class, 'store']);
+    Route::get('/clientes/exportar',      [ClienteController::class, 'exportar']);
+    Route::get('/clientes/{id}',          [ClienteController::class, 'show']);
+    Route::put('/clientes/{id}',          [ClienteController::class, 'update']);
+    Route::get('/clientes/{id}/ordenes',  [ClienteController::class, 'ordenes']);
 
     // Órdenes
     Route::get('/ordenes',              [OrdenController::class, 'index']);
     Route::post('/ordenes',             [OrdenController::class, 'store']);
-    Route::get('/ordenes/{id}',         [OrdenController::class, 'show']);
-    Route::patch('/ordenes/{id}/estado', [OrdenController::class, 'updateEstado']);
-    Route::get('/ordenes/{id}/pdf',     [OrdenController::class, 'pdf']);
+    Route::get('/ordenes/{id}',                         [OrdenController::class, 'show']);
+    Route::patch('/ordenes/{id}/estado',                [OrdenController::class, 'updateEstado']);
+    Route::get('/ordenes/{id}/pdf',                     [OrdenController::class, 'pdf']);
+    Route::post('/ordenes/{id}/reenviar-cotizacion',    [OrdenController::class, 'reenviarCotizacion']);
+    Route::patch('/ordenes/{id}/fechas-entrega',        [OrdenController::class, 'asignarFechas']);
 
     // Pagos
     Route::get('/ordenes/{id}/pagos',  [PagoController::class, 'index']);

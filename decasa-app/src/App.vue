@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { useNotificacionesStore } from '@/stores/notificaciones'
 import ScrollToTop from '@/components/common/ScrollToTop.vue'
+import ToastContainer from '@/components/common/ToastContainer.vue'
 import {
   HomeIcon,
   ClipboardDocumentListIcon,
@@ -16,6 +17,17 @@ import {
   ArrowRightStartOnRectangleIcon,
   BellIcon,
   UserCircleIcon,
+  EllipsisHorizontalIcon,
+  ShoppingCartIcon,
+  BuildingStorefrontIcon,
+  WrenchIcon,
+  CheckCircleIcon,
+  ExclamationTriangleIcon,
+  ClockIcon,
+  CubeIcon,
+  XCircleIcon,
+  CalendarIcon,
+  CalendarDaysIcon,
 } from '@heroicons/vue/24/outline'
 
 const route  = useRoute()
@@ -25,8 +37,8 @@ const notif  = useNotificacionesStore()
 
 const showNav    = computed(() => auth.isAuthenticated && route.name !== 'login')
 const abrirNotif = ref(false)
+const abrirMas   = ref(false)
 
-// Refrescar datos del usuario (firma_url, id) al cargar la app
 onMounted(() => { auth.fetchMe() })
 
 watch(() => auth.isAuthenticated, (isAuth) => {
@@ -36,27 +48,44 @@ watch(() => auth.isAuthenticated, (isAuth) => {
   const canal = auth.isSupervisor
     ? 'notificaciones'
     : `notificaciones.${auth.usuario?.id}`
-  window.Echo.channel(canal).listen('.nueva.notificacion', n => {
-    notif.agregarNueva(n)
-  })
+  window.Echo.channel(canal)
+    .stopListening('.nueva.notificacion')
+    .listen('.nueva.notificacion', n => { notif.agregarNueva(n) })
 }, { immediate: true })
 
+// Cerrar menú "Más" al cambiar de ruta
+watch(() => route.name, () => { abrirMas.value = false })
+
 const navItems = computed(() => {
-  const base = [
+  if (auth.isSupervisor) {
+    return [
+      { name: 'dashboard',  label: 'Inicio',      icon: HomeIcon },
+      { name: 'ordenes',    label: 'Órdenes',     icon: ClipboardDocumentListIcon },
+      { name: 'produccion', label: 'Producción',  icon: WrenchScrewdriverIcon },
+      { name: 'clientes',   label: 'Clientes',    icon: UserGroupIcon },
+      { name: 'inventario', label: 'Inventario',  icon: ArchiveBoxIcon },
+      { name: 'usuarios',   label: 'Vendedores',  icon: UsersIcon },
+      { name: 'reportes',   label: 'Reportes',    icon: ChartBarIcon },
+    ]
+  }
+  return [
     { name: 'dashboard',  label: 'Inicio',     icon: HomeIcon },
     { name: 'ordenes',    label: 'Órdenes',    icon: ClipboardDocumentListIcon },
     { name: 'clientes',   label: 'Clientes',   icon: UserGroupIcon },
     { name: 'inventario', label: 'Inventario', icon: ArchiveBoxIcon },
+    { name: 'mis-stats',  label: 'Estadíst.',  icon: PresentationChartLineIcon },
   ]
-  if (auth.isSupervisor) {
-    base.push({ name: 'produccion', label: 'Producción', icon: WrenchScrewdriverIcon })
-    base.push({ name: 'usuarios',   label: 'Vendedores', icon: UsersIcon })
-    base.push({ name: 'reportes',   label: 'Reportes',   icon: ChartBarIcon })
-  } else {
-    base.push({ name: 'mis-stats', label: 'Estadíst.', icon: PresentationChartLineIcon })
-  }
-  return base
 })
+
+// Para supervisor: primeros 4 siempre visibles, el resto en "Más"
+const navPrimarios   = computed(() => auth.isSupervisor ? navItems.value.slice(0, 4) : navItems.value)
+const navSecundarios = computed(() => auth.isSupervisor ? navItems.value.slice(4)    : [])
+const masActivo      = computed(() => navSecundarios.value.some(i => i.name === route.name))
+
+function irA(name) {
+  abrirMas.value = false
+  router.push({ name })
+}
 
 async function doLogout() {
   await auth.logout()
@@ -73,15 +102,19 @@ async function abrirNotificacion(n) {
 }
 
 function tipoIcono(tipo) {
-  return {
-    venta_nueva:       '🛒',
-    venta_otra_tienda: '🏪',
-    en_produccion:     '🔨',
-    entregado:         '✅',
-    retrasado:         '⚠️',
-    por_vencer:        '⏰',
-    cancelado:         '❌',
-  }[tipo] ?? '🔔'
+  const icons = {
+    venta_nueva:       ShoppingCartIcon,
+    venta_otra_tienda: BuildingStorefrontIcon,
+    en_produccion:     WrenchIcon,
+    entregado:         CheckCircleIcon,
+    retrasado:         ExclamationTriangleIcon,
+    por_vencer:        ClockIcon,
+    entrega_hoy:       CubeIcon,
+    cancelado:         XCircleIcon,
+    asignar_fecha:     CalendarIcon,
+    fecha_asignada:    CalendarDaysIcon,
+  }
+  return icons[tipo] ?? BellIcon
 }
 
 function formatFecha(iso) {
@@ -122,10 +155,10 @@ function formatFecha(iso) {
             </span>
           </button>
 
-          <!-- Dropdown -->
+          <!-- Dropdown — full-width en móvil, dropdown clásico en desktop -->
           <div
             v-if="abrirNotif"
-            class="absolute right-0 top-full mt-1 w-80 max-h-[28rem] overflow-y-auto bg-white rounded-xl shadow-xl border border-gray-200 z-50"
+            class="fixed inset-x-2 top-14 z-50 max-h-[70vh] overflow-y-auto bg-white rounded-xl shadow-xl border border-gray-200 sm:absolute sm:inset-x-auto sm:top-full sm:right-0 sm:mt-1 sm:w-80 sm:max-h-[28rem]"
           >
             <div class="flex items-center justify-between px-4 py-2 border-b border-gray-100 sticky top-0 bg-white">
               <span class="font-semibold text-sm text-gray-700">Notificaciones</span>
@@ -152,7 +185,7 @@ function formatFecha(iso) {
               ]"
             >
               <div class="flex gap-2 items-start">
-                <span class="text-base mt-0.5">{{ tipoIcono(n.tipo) }}</span>
+                <component :is="tipoIcono(n.tipo)" class="w-4 h-4 mt-0.5 text-gray-600 flex-shrink-0" />
                 <div class="flex-1 min-w-0">
                   <p class="text-sm font-medium text-gray-800 leading-tight">{{ n.titulo }}</p>
                   <p class="text-xs text-gray-500 leading-snug mt-0.5">{{ n.mensaje }}</p>
@@ -163,8 +196,8 @@ function formatFecha(iso) {
             </button>
           </div>
 
-          <!-- Backdrop -->
-          <div v-if="abrirNotif" class="fixed inset-0 z-40" @click="abrirNotif = false" />
+          <!-- Backdrop notificaciones -->
+          <div v-if="abrirNotif" class="fixed inset-0 z-40 bg-black/20 sm:bg-transparent" @click="abrirNotif = false" />
         </div>
 
         <button
@@ -179,29 +212,100 @@ function formatFecha(iso) {
 
     <!-- Page content -->
     <main class="flex-1 pb-20">
-      <RouterView />
+      <RouterView v-slot="{ Component, route }">
+        <Transition name="page" mode="out-in">
+          <component :is="Component" :key="route.fullPath" />
+        </Transition>
+      </RouterView>
     </main>
 
-    <!-- Bottom tab bar (mobile) -->
-    <nav
-      v-if="showNav"
-      class="fixed bottom-0 inset-x-0 bg-white border-t border-gray-200 flex z-10"
-    >
-      <button
-        v-for="item in navItems"
-        :key="item.name"
-        @click="router.push({ name: item.name })"
-        :class="[
-          'flex-1 flex flex-col items-center py-2 text-xs gap-0.5 transition-colors',
-          route.name === item.name ? 'text-blue-600 font-semibold' : 'text-gray-500',
-        ]"
-      >
-        <component :is="item.icon" class="w-6 h-6" />
-        {{ item.label }}
-      </button>
+    <!-- ── Bottom tab bar ───────────────────────────────────────────────────── -->
+    <nav v-if="showNav" class="fixed bottom-0 inset-x-0 bg-white border-t border-gray-200 z-10">
+
+      <!-- Menú "Más" para supervisor (panel sobre el nav) -->
+      <Transition name="slide-up">
+        <div
+          v-if="abrirMas && navSecundarios.length"
+          class="flex border-b border-gray-100 bg-white"
+        >
+          <button
+            v-for="item in navSecundarios"
+            :key="item.name"
+            @click="irA(item.name)"
+            :class="[
+              'flex-1 flex flex-col items-center py-3 text-xs gap-0.5 transition-colors',
+              route.name === item.name ? 'text-blue-600 font-semibold' : 'text-gray-500',
+            ]"
+          >
+            <component :is="item.icon" class="w-6 h-6" />
+            {{ item.label }}
+          </button>
+        </div>
+      </Transition>
+
+      <!-- Fila principal -->
+      <div class="flex">
+        <!-- Ítems primarios -->
+        <button
+          v-for="item in navPrimarios"
+          :key="item.name"
+          @click="irA(item.name)"
+          :class="[
+            'flex-1 flex flex-col items-center py-2 text-xs gap-0.5 transition-colors',
+            route.name === item.name ? 'text-blue-600 font-semibold' : 'text-gray-500',
+          ]"
+        >
+          <component :is="item.icon" class="w-6 h-6" />
+          {{ item.label }}
+        </button>
+
+        <!-- Botón "Más" — solo supervisor -->
+        <button
+          v-if="navSecundarios.length"
+          @click="abrirMas = !abrirMas"
+          :class="[
+            'flex-1 flex flex-col items-center py-2 text-xs gap-0.5 transition-colors',
+            masActivo || abrirMas ? 'text-blue-600 font-semibold' : 'text-gray-500',
+          ]"
+        >
+          <EllipsisHorizontalIcon class="w-6 h-6" />
+          Más
+        </button>
+      </div>
     </nav>
+
+    <!-- Backdrop "Más" -->
+    <div
+      v-if="abrirMas"
+      class="fixed inset-0 z-[9]"
+      @click="abrirMas = false"
+    />
 
     <!-- Scroll to top -->
     <ScrollToTop />
+
+    <!-- Toasts globales -->
+    <ToastContainer />
   </div>
 </template>
+
+<style scoped>
+.slide-up-enter-active,
+.slide-up-leave-active {
+  transition: transform 0.18s ease, opacity 0.18s ease;
+}
+.slide-up-enter-from,
+.slide-up-leave-to {
+  transform: translateY(8px);
+  opacity: 0;
+}
+
+.page-enter-active,
+.page-leave-active {
+  transition: opacity 0.12s ease;
+}
+.page-enter-from,
+.page-leave-to {
+  opacity: 0;
+}
+</style>

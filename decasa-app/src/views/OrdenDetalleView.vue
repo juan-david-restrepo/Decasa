@@ -1,23 +1,38 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { getOrden, updateEstado, descargarPdfOrden } from '@/api/ordenes'
+import { useAuthStore } from '@/stores/auth'
+import { useToast } from '@/composables/useToast'
+import { getOrden, updateEstado, descargarPdfOrden, reenviarCotizacion, asignarFechasEntrega } from '@/api/ordenes'
 import BadgeEstado from '@/components/common/BadgeEstado.vue'
 import MoneyDisplay from '@/components/common/MoneyDisplay.vue'
 import RegistroPagoModal from '@/components/ordenes/RegistroPagoModal.vue'
 import { SparklesIcon, XMarkIcon } from '@heroicons/vue/24/solid'
-import { DocumentIcon } from '@heroicons/vue/24/outline'
+import { DocumentIcon, EnvelopeIcon, ChatBubbleLeftEllipsisIcon, ArrowDownTrayIcon, CalendarIcon, BuildingOffice2Icon } from '@heroicons/vue/24/outline'
 
 const route = useRoute()
 const router = useRouter()
+const auth = useAuthStore()
+const toast = useToast()
 
 const orden = ref(null)
 const loading = ref(true)
 const verFactura = ref(false)
+const bocetoModal = ref('')
 const error = ref('')
 const showPagoModal = ref(false)
 const changingEstado = ref(false)
 const estadoError = ref('')
+const enviandoEmail = ref(false)
+const emailManual = ref('')
+const mostrarEmailManual = ref(false)
+
+const fechasEdicion = ref({})
+const guardandoFechas = ref(false)
+
+const todasFechasAsignadas = computed(() =>
+  (orden.value?.items?.length ?? 0) > 0 && (orden.value?.items?.every(i => i.fecha_entrega_prom) ?? false)
+)
 
 const transicionesValidas = {
   pendiente_anticipo: ['en_produccion', 'listo_entrega', 'cancelado'],
@@ -43,7 +58,11 @@ const porcentajePagado = computed(() => {
 })
 
 const puedeCambiarEstado = computed(() => {
-  return orden.value && !['entregado', 'cancelado'].includes(orden.value.estado)
+  if (!orden.value) return false
+  if (!auth.isSupervisor) return false
+  if (['entregado', 'cancelado'].includes(orden.value.estado)) return false
+  if (tienePersonalizados.value) return false
+  return true
 })
 
 const tienePersonalizados = computed(() =>
@@ -76,6 +95,13 @@ async function cargarOrden() {
     orden.value = data
     nuevoEstado.value = ''
     estadoError.value = ''
+    const edicion = {}
+    for (const item of data.items ?? []) {
+      edicion[item.id] = item.fecha_entrega_prom
+        ? String(item.fecha_entrega_prom).substring(0, 10)
+        : ''
+    }
+    fechasEdicion.value = edicion
   } catch (e) {
     error.value = e.response?.data?.message ?? 'No se pudo cargar la orden.'
   } finally {
@@ -86,12 +112,11 @@ async function cargarOrden() {
 async function cambiarEstado() {
   if (!nuevoEstado.value) return
   changingEstado.value = true
-  estadoError.value = ''
   try {
     await updateEstado(orden.value.id, nuevoEstado.value)
     await cargarOrden()
   } catch (e) {
-    estadoError.value = e.response?.data?.message ?? 'Error al cambiar el estado.'
+    toast.error(e.response?.data?.message ?? 'Error al cambiar el estado.')
   } finally {
     changingEstado.value = false
   }
@@ -115,7 +140,7 @@ async function descargarPdf() {
 
 function formatFecha(dateStr) {
   if (!dateStr) return '—'
-  const d = new Date(dateStr + 'T00:00:00')
+  const d = new Date(String(dateStr).substring(0, 10) + 'T00:00:00')
   return d.toLocaleDateString('es-CO', { day: '2-digit', month: 'short', year: 'numeric' })
 }
 
@@ -129,6 +154,99 @@ const tipoPagoLabel = {
   anticipo: 'Anticipo',
   abono: 'Abono',
   saldo_final: 'Saldo final',
+}
+
+// ── Compartir ─────────────────────────────────────────────────────────────────
+
+function whatsappLink() {
+  const telefono = orden.value?.cliente?.telefono ?? ''
+  // Limpiar dígitos y formatear para Colombia (+57)
+  const digits = telefono.replace(/\D/g, '')
+  const numero = digits.startsWith('57') ? digits : `57${digits}`
+
+  const o = orden.value
+  const total     = new Intl.NumberFormat('es-CO').format(o.valor_total)
+  const anticipo  = new Intl.NumberFormat('es-CO').format(o.total_pagado)
+  const saldo     = new Intl.NumberFormat('es-CO').format(o.saldo_pendiente)
+
+  const productos = (o.items ?? [])
+    .map(i => `  • ${i.producto?.nombre ?? '—'} x${i.cantidad}`)
+    .join('\n')
+
+  const mensaje = [
+    `Hola ${o.cliente?.nombre} 👋`,
+    ``,
+    `Aquí tienes el resumen de tu pedido en *Decasa* (Orden #${o.id}):`,
+    ``,
+    `🛋️ *Productos:*`,
+    productos,
+    ``,
+    `💰 *Total:* $${total} COP`,
+    `✅ *Anticipo pagado:* $${anticipo} COP`,
+    o.saldo_pendiente > 0 ? `💳 *Saldo pendiente:* $${saldo} COP` : `🎉 *¡Pedido totalmente pagado!*`,
+    ``,
+    `Adjunto encontrarás la cotización en PDF con todos los detalles.`,
+    `¡Gracias por tu compra! 🛋️`,
+  ].filter(l => l !== null).join('\n')
+
+  return `https://wa.me/${numero}?text=${encodeURIComponent(mensaje)}`
+}
+
+async function abrirWhatsApp() {
+  // Primero descargar/abrir el PDF para que el vendedor lo tenga disponible
+  descargarPdf()
+  // Abrir WhatsApp con mensaje pre-llenado
+  window.open(whatsappLink(), '_blank')
+}
+
+async function enviarEmail(emailDestino = null) {
+  enviandoEmail.value = true
+  try {
+    const { data } = await reenviarCotizacion(orden.value.id, emailDestino)
+    toast.success(data.message)
+    mostrarEmailManual.value = false
+    emailManual.value = ''
+  } catch (e) {
+    toast.error(e.response?.data?.message ?? 'Error al enviar el email.')
+  } finally {
+    enviandoEmail.value = false
+  }
+}
+
+async function descargarBoceto(url) {
+  try {
+    const resp = await fetch(url)
+    const blob = await resp.blob()
+    const ext = blob.type.includes('png') ? 'png' : blob.type.includes('jpg') || blob.type.includes('jpeg') ? 'jpg' : 'png'
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(blob)
+    a.download = `boceto.${ext}`
+    a.click()
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000)
+  } catch {
+    // noop
+  }
+}
+
+async function guardarFechas() {
+  guardandoFechas.value = true
+  try {
+    const items = Object.entries(fechasEdicion.value)
+      .filter(([, fecha]) => fecha)
+      .map(([id, fecha]) => ({ id: Number(id), fecha }))
+    if (items.length === 0) {
+      toast.error('Debes ingresar al menos una fecha.')
+      guardandoFechas.value = false
+      return
+    }
+    const { data } = await asignarFechasEntrega(orden.value.id, items)
+    toast.success(data.message)
+    await cargarOrden()
+  } catch (e) {
+    toast.error(e.response?.data?.message ?? 'Error al guardar las fechas.')
+  } finally {
+    guardandoFechas.value = false
+  }
 }
 
 onMounted(cargarOrden)
@@ -155,7 +273,7 @@ onMounted(cargarOrden)
     </div>
 
     <!-- Loading -->
-    <div v-if="loading" class="text-center py-12 text-gray-400">Cargando...</div>
+    <AppSpinner v-if="loading" />
 
     <!-- Error -->
     <div v-else-if="error" class="bg-red-50 rounded-xl px-4 py-3 text-sm text-red-600">
@@ -242,12 +360,31 @@ onMounted(cargarOrden)
               <p class="font-medium text-sm text-gray-800">{{ item.producto?.nombre }}</p>
               <p class="text-xs text-gray-400">{{ item.producto?.categoria }}</p>
               <p class="text-xs text-gray-500 mt-0.5">Cantidad: {{ item.cantidad }}</p>
-               <p v-if="item.es_personalizado" class="text-xs text-purple-600 mt-1 flex items-center gap-1">
+              <p v-if="item.es_personalizado" class="text-xs text-purple-600 mt-1 flex items-center gap-1">
                 <SparklesIcon class="w-3.5 h-3.5" /> Personalizado
-                <span v-if="item.specs_personalizacion?.descripcion">
-                  — {{ item.specs_personalizacion.descripcion }}
-                </span>
               </p>
+              <p v-if="item.es_personalizado && item.specs_personalizacion?.descripcion" class="text-xs text-gray-600 mt-1 bg-purple-50 rounded-lg px-2 py-1.5 whitespace-pre-wrap">
+                {{ item.specs_personalizacion.descripcion }}
+              </p>
+              <div v-if="item.boceto_url" class="mt-2">
+                <div class="flex items-center justify-between mb-1">
+                  <p class="text-xs text-gray-400">Boceto</p>
+                  <button
+                    @click.stop="descargarBoceto(item.boceto_url)"
+                    class="flex items-center gap-1 text-xs text-blue-600 hover:text-blue-700 transition-colors"
+                    title="Descargar boceto"
+                  >
+                    <ArrowDownTrayIcon class="w-3.5 h-3.5" />
+                    Descargar
+                  </button>
+                </div>
+                <img
+                  :src="item.boceto_url"
+                  alt="Boceto"
+                  class="rounded-lg border border-purple-200 object-contain bg-white w-full max-h-48 cursor-pointer"
+                  @click="bocetoModal = item.boceto_url"
+                />
+              </div>
               <p v-if="item.fecha_entrega_prom" class="text-xs text-gray-500 mt-0.5">
                 Entrega estimada: {{ formatFecha(item.fecha_entrega_prom) }}
               </p>
@@ -287,8 +424,108 @@ onMounted(cargarOrden)
         </div>
       </div>
 
+      <!-- Asignar fechas de entrega (solo supervisor, mientras falten fechas) -->
+      <div v-if="auth.isSupervisor && !todasFechasAsignadas" class="bg-white rounded-xl shadow-sm p-4 space-y-3">
+        <p class="text-xs font-semibold text-gray-500 uppercase">Asignar fechas de entrega</p>
+        <div
+          v-for="item in orden.items"
+          :key="item.id"
+          class="space-y-1"
+        >
+          <label class="text-xs font-medium text-gray-600">{{ item.producto?.nombre }}</label>
+          <input
+            v-model="fechasEdicion[item.id]"
+            type="date"
+            class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+          />
+        </div>
+        <button
+          @click="guardarFechas"
+          :disabled="guardandoFechas"
+          class="w-full bg-blue-600 text-white rounded-lg py-2.5 text-sm font-semibold hover:bg-blue-700 disabled:opacity-50 transition-colors"
+        >
+          {{ guardandoFechas ? 'Guardando...' : 'Guardar fechas' }}
+        </button>
+      </div>
+
+      <!-- Compartir cotización -->
+      <div class="bg-white rounded-xl shadow-sm p-4 space-y-3">
+        <p class="text-xs font-semibold text-gray-500 uppercase">Compartir cotización</p>
+
+        <!-- Aviso: fechas pendientes -->
+        <div
+          v-if="!todasFechasAsignadas"
+          class="flex items-start gap-2 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2.5"
+        >
+          <CalendarIcon class="w-4 h-4 mt-0.5 text-amber-500 flex-shrink-0" />
+          <p class="text-xs text-amber-700 leading-snug">
+            El supervisor debe asignar las fechas de entrega antes de compartir la cotización con el cliente.
+          </p>
+        </div>
+
+        <template v-if="todasFechasAsignadas">
+          <div class="flex gap-2">
+            <!-- WhatsApp -->
+            <button
+              v-if="orden.cliente?.telefono"
+              @click="abrirWhatsApp"
+              class="flex-1 flex items-center justify-center gap-2 bg-green-500 hover:bg-green-600 text-white rounded-lg py-2.5 text-sm font-semibold transition-colors"
+            >
+              <ChatBubbleLeftEllipsisIcon class="w-4 h-4" />
+              WhatsApp
+            </button>
+
+            <!-- Email -->
+            <button
+              v-if="orden.cliente?.email"
+              @click="enviarEmail()"
+              :disabled="enviandoEmail"
+              class="flex-1 flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-lg py-2.5 text-sm font-semibold transition-colors"
+            >
+              <EnvelopeIcon class="w-4 h-4" />
+              {{ enviandoEmail ? 'Enviando...' : 'Enviar email' }}
+            </button>
+
+            <!-- Si no hay email registrado: opción de ingresar uno -->
+            <button
+              v-else
+              @click="mostrarEmailManual = !mostrarEmailManual"
+              class="flex-1 flex items-center justify-center gap-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg py-2.5 text-sm font-semibold transition-colors"
+            >
+              <EnvelopeIcon class="w-4 h-4" />
+              Email manual
+            </button>
+          </div>
+
+          <!-- Email manual (si el cliente no tiene email guardado) -->
+          <div v-if="mostrarEmailManual" class="flex gap-2">
+            <input
+              v-model="emailManual"
+              type="email"
+              placeholder="correo@ejemplo.com"
+              class="flex-1 rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+            <button
+              @click="enviarEmail(emailManual)"
+              :disabled="enviandoEmail || !emailManual"
+              class="bg-blue-600 text-white px-4 rounded-lg text-sm font-semibold disabled:opacity-50 hover:bg-blue-700 transition-colors"
+            >
+              {{ enviandoEmail ? '...' : 'Enviar' }}
+            </button>
+          </div>
+
+          <!-- Sin teléfono ni email -->
+          <p
+            v-if="!orden.cliente?.telefono && !orden.cliente?.email"
+            class="text-xs text-gray-400 text-center py-1"
+          >
+            El cliente no tiene teléfono ni email registrado.
+          </p>
+        </template>
+      </div>
+
       <!-- Acciones -->
-      <div v-if="puedeCambiarEstado || puedeRegistrarPago" class="space-y-3">
+      <div v-if="puedeCambiarEstado || puedeRegistrarPago || (tienePersonalizados && !['entregado','cancelado'].includes(orden.estado))" class="space-y-3">
         <p class="text-xs font-semibold text-gray-500 uppercase">Acciones</p>
 
         <!-- Registrar pago -->
@@ -300,7 +537,19 @@ onMounted(cargarOrden)
           Registrar pago
         </button>
 
-        <!-- Cambiar estado -->
+        <!-- Aviso: estado controlado por Producción -->
+        <div
+          v-if="tienePersonalizados && !['entregado','cancelado'].includes(orden.estado)"
+          class="bg-purple-50 border border-purple-200 rounded-xl px-4 py-3 flex items-start gap-3"
+        >
+          <BuildingOffice2Icon class="w-5 h-5 mt-0.5 text-purple-600 flex-shrink-0" />
+          <div>
+            <p class="text-sm font-semibold text-purple-800">Estado gestionado desde Producción</p>
+            <p class="text-xs text-purple-600 mt-0.5">Esta orden tiene ítems personalizados. El estado se actualiza automáticamente al cambiar el avance en el módulo de Producción.</p>
+          </div>
+        </div>
+
+        <!-- Cambiar estado (solo órdenes sin personalizados) -->
         <div v-if="puedeCambiarEstado" class="space-y-2">
           <div class="flex gap-2">
             <select
@@ -318,7 +567,6 @@ onMounted(cargarOrden)
               class="bg-gray-800 text-white rounded-lg px-4 py-2 text-sm font-semibold hover:bg-gray-900 disabled:opacity-50 transition-colors"
             >Aplicar</button>
           </div>
-          <p v-if="estadoError" class="text-xs text-red-600 bg-red-50 rounded-lg px-3 py-2">{{ estadoError }}</p>
         </div>
       </div>
     </template>
@@ -333,6 +581,35 @@ onMounted(cargarOrden)
       @close="showPagoModal = false"
       @pago-registrado="onPagoRegistrado"
     />
+
+    <!-- Lightbox boceto -->
+    <Transition name="fade">
+      <div
+        v-if="bocetoModal"
+        class="fixed inset-0 z-[60] flex items-center justify-center p-6"
+        @click.self="bocetoModal = ''"
+      >
+        <div class="absolute inset-0 bg-black/85" @click="bocetoModal = ''" />
+        <div class="relative w-full max-w-lg">
+          <button
+            @click="bocetoModal = ''"
+            class="absolute -top-3 -right-3 z-10 bg-white rounded-full p-1.5 shadow-lg"
+          >
+            <XMarkIcon class="w-5 h-5 text-gray-700" />
+          </button>
+          <div class="bg-white rounded-2xl overflow-hidden shadow-2xl p-2">
+            <img :src="bocetoModal" alt="Boceto" class="w-full object-contain max-h-[70vh] rounded-xl" />
+            <button
+              @click="descargarBoceto(bocetoModal)"
+              class="mt-2 w-full flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl py-2 text-sm font-semibold transition-colors"
+            >
+              <ArrowDownTrayIcon class="w-4 h-4" />
+              Descargar boceto
+            </button>
+          </div>
+        </div>
+      </div>
+    </Transition>
 
     <!-- Lightbox foto factura -->
     <Transition name="fade">

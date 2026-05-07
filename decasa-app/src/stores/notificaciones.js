@@ -12,6 +12,7 @@ export const useNotificacionesStore = defineStore('notificaciones', () => {
   }
 
   function agregarNueva(n) {
+    if (items.value.some(x => x.id === n.id)) return
     items.value.unshift(n)
   }
 

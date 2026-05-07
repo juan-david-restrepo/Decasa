@@ -2,15 +2,18 @@
 import { ref, computed, watch, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
+import { useToast } from '@/composables/useToast'
 import api from '@/api'
 import { getVariantes } from '@/api/inventario'
 import { updateCliente, CATEGORIAS_DISPONIBLES } from '@/api/clientes'
 import { ArrowPathIcon, SparklesIcon, XMarkIcon } from '@heroicons/vue/24/solid'
-import { ArrowPathIcon as ArrowPathOutlineIcon, PhotoIcon, UserGroupIcon, ArrowPathIcon as ConvertIcon } from '@heroicons/vue/24/outline'
+import { ArrowPathIcon as ArrowPathOutlineIcon, PhotoIcon, UserGroupIcon, ArrowPathIcon as ConvertIcon, ExclamationTriangleIcon, PencilIcon, MapPinIcon, SwatchIcon } from '@heroicons/vue/24/outline'
 import FirmaCanvas from '@/components/FirmaCanvas.vue'
+import BocetoCanvas from '@/components/BocetoCanvas.vue'
 
 const router = useRouter()
 const auth   = useAuthStore()
+const toast  = useToast()
 
 // ── Pasos ─────────────────────────────────────────────────────────────────────
 const step = ref(1)
@@ -46,8 +49,8 @@ async function buscarCliente() {
 
 function seleccionarCliente(c) {
   clienteSeleccionado.value = c
-  clienteResultados.value   = []
-  clienteQuery.value        = c.nombre
+  clienteResultados.value = []
+  clienteQuery.value = c.nombre
 
   // Si es cliente interesado, sugerir conversión
   if (c.tipo === 'interesado') {
@@ -70,7 +73,7 @@ async function convertirAOficial(cliente) {
 }
 
 async function crearCliente() {
-  errCliente.value  = ''
+  errCliente.value = ''
   creandoCliente.value = true
   try {
     const { data } = await api.post('/clientes', nuevoCliente.value)
@@ -87,7 +90,7 @@ async function crearCliente() {
 
 // ── Paso 1: Tienda + Canal ────────────────────────────────────────────────────
 const tiendaId = ref(auth.usuario?.tienda_default_id ?? '')
-const canal    = ref('fisica')
+const canal = ref('fisica')
 
 const canalesopts = [
   { value: 'fisica',     label: 'Física' },
@@ -101,11 +104,11 @@ function paso1Valido() {
 }
 
 // ── Paso 2: Productos / Carrito ───────────────────────────────────────────────
-const productoQuery      = ref('')
+const productoQuery = ref('')
 const productoResultados = ref([])
-const buscandoProducto   = ref(false)
-const items              = ref([])
-const tiendaBusqueda     = ref(auth.usuario?.tienda_default_id ?? '')
+const buscandoProducto = ref(false)
+const items = ref([])
+const tiendaBusqueda = ref(auth.usuario?.tienda_default_id ?? '')
 
 async function buscarProducto() {
   if (!productoQuery.value.trim()) return
@@ -130,10 +133,10 @@ function nombreTiendaBusqueda() {
 
 // ── Selector de variante ──────────────────────────────────────────────────────
 const mostrarVariantePicker = ref(false)
-const productoParaVariante  = ref(null)
-const variantesDisponibles  = ref([])
-const cargandoVariantes     = ref(false)
-const varianteSeleccionada  = ref(null)
+const productoParaVariante = ref(null)
+const variantesDisponibles = ref([])
+const cargandoVariantes = ref(false)
+const varianteSeleccionada = ref(null)
 
 async function agregarItem(producto) {
   // Si tiene variantes en la tienda de búsqueda, abrir picker
@@ -141,7 +144,7 @@ async function agregarItem(producto) {
   if (producto.variantes?.length > 0) {
     productoParaVariante.value = producto
     varianteSeleccionada.value = null
-    cargandoVariantes.value    = true
+    cargandoVariantes.value = true
     mostrarVariantePicker.value = true
     try {
       const { data } = await getVariantes(producto.id, tiendaConsulta)
@@ -175,27 +178,39 @@ function _pushItem(producto, variante) {
   if (existe) { existe.cantidad++; return }
 
   items.value.push({
-    producto_id:             producto.id,
-    variante_id:             variante?.id ?? null,
-    tienda_origen_id:        esOtraTienda ? (tiendaBusqueda.value ?? null) : null,
-    nombre:                  producto.nombre,
-    categoria:               producto.categoria,
-    variante_label:          varianteLabel,
-    stock_libre:             stockL,
-    personalizable:          producto.personalizable ?? false,
-    cantidad:                1,
-    precio_unitario:         producto.precio_base ?? 0,
-    es_personalizado:        false,
+    producto_id: producto.id,
+    variante_id: variante?.id ?? null,
+    tienda_origen_id: esOtraTienda ? (tiendaBusqueda.value ?? null) : null,
+    nombre: producto.nombre,
+    categoria: producto.categoria,
+    variante_label: varianteLabel,
+    stock_libre: stockL,
+    personalizable: producto.personalizable ?? false,
+    cantidad: 1,
+    precio_unitario: producto.precio_base ?? 0,
+    es_personalizado: false,
     specs_descripcion:       '',
-    tienda_origen:           esOtraTienda ? nombreTiendaBusqueda() : null,
-    fecha_entrega_prometida: '',
+    tienda_origen: esOtraTienda ? nombreTiendaBusqueda() : null,
+    fecha_entrega_prometida: null,
+    boceto_blob: null,
+    boceto_url: '',
+    boceto_preview: null,
   })
   productoResultados.value = []
   productoQuery.value = ''
 }
 
 function quitarItem(idx) {
+  const item = items.value[idx]
+  if (item.boceto_preview) URL.revokeObjectURL(item.boceto_preview)
   items.value.splice(idx, 1)
+}
+
+function onBocetoUpdate(item, blob) {
+  if (item.boceto_preview) URL.revokeObjectURL(item.boceto_preview)
+  item.boceto_blob    = blob
+  item.boceto_url     = ''
+  item.boceto_preview = blob ? URL.createObjectURL(blob) : null
 }
 
 // ── Paso 3: Pago ──────────────────────────────────────────────────────────────
@@ -205,30 +220,22 @@ const anticipo_metodo      = ref('efectivo')
 const anticipo_referencia  = ref('')
 const notas                = ref('')
 const submitting           = ref(false)
-const errSubmit            = ref('')
 const cooldown             = ref(0)   // segundos restantes antes de poder reintentar
 let   cooldownTimer        = null
 
 const facturaFotoFile      = ref(null)
 const facturaFotoUrl       = ref('')
+const facturaFotoPreview   = ref('')
 const subiendoFactura      = ref(false)
 
 const firmaBlob            = ref(null)
 const firmaUrl             = ref('')
-const usandoFirmaGuardada  = ref(!!auth.usuario?.firma_url)
 watch(firmaBlob, () => { firmaUrl.value = '' })
 
-function cambiarFirma() {
-  usandoFirmaGuardada.value = false
-  firmaBlob.value = null
-  firmaUrl.value = ''
-}
-
-function usarFirmaGuardada() {
-  usandoFirmaGuardada.value = true
-  firmaBlob.value = null
-  firmaUrl.value = ''
-}
+watch(facturaFotoFile, (file, oldFile) => {
+  if (facturaFotoPreview.value) URL.revokeObjectURL(facturaFotoPreview.value)
+  facturaFotoPreview.value = file ? URL.createObjectURL(file) : ''
+})
 
 const direccionEnvio       = ref('')
 const ciudadEnvio          = ref('')
@@ -260,18 +267,12 @@ const minimoAnticipo = computed(() =>
 )
 
 function irAPaso3() {
-  const sinFecha = items.value.find(i => !i.fecha_entrega_prometida)
-  if (sinFecha) {
-    alert(`El ítem "${sinFecha.nombre}" no tiene fecha de entrega prometida. Es obligatoria.`)
-    return
-  }
   anticipo_monto.value = minimoAnticipo.value
   step.value = 3
 }
 
 async function submit() {
   if (submitting.value || subiendoFactura.value || cooldown.value > 0) return
-  errSubmit.value = ''
   submitting.value = true
   try {
     // Subir foto de factura si se seleccionó
@@ -287,10 +288,21 @@ async function submit() {
       subiendoFactura.value = false
     }
 
-    // Firma: usar la guardada o subir la nueva
-    if (usandoFirmaGuardada.value && auth.usuario?.firma_url) {
-      firmaUrl.value = auth.usuario.firma_url
-    } else if (firmaBlob.value && !firmaUrl.value) {
+    // Bocetos de ítems personalizados: subir los que tengan blob pendiente
+    for (const item of items.value) {
+      if (item.es_personalizado && item.boceto_blob && !item.boceto_url) {
+        const fd = new FormData()
+        fd.append('foto', item.boceto_blob, 'boceto.png')
+        fd.append('folder', 'bocetos')
+        const { data: uploadData } = await api.post('/upload/foto', fd, {
+          headers: { 'Content-Type': 'multipart/form-data' },
+        })
+        item.boceto_url = uploadData.url
+      }
+    }
+
+    // Firma del cliente: subir el blob dibujado en el canvas
+    if (firmaBlob.value && !firmaUrl.value) {
       const fd = new FormData()
       fd.append('foto', firmaBlob.value, 'firma.png')
       fd.append('folder', 'firmas')
@@ -324,6 +336,7 @@ async function submit() {
         specs_personalizacion:   i.es_personalizado && i.specs_descripcion
           ? { descripcion: i.specs_descripcion }
           : undefined,
+        boceto_url:              i.es_personalizado && i.boceto_url ? i.boceto_url : undefined,
       })),
     }
 
@@ -341,7 +354,7 @@ async function submit() {
       router.push({ name: 'orden-detalle', params: { id: e.response.data.orden_id } })
       return
     }
-    errSubmit.value = e.response?.data?.message ?? 'Error al crear la orden'
+    toast.error(e.response?.data?.message ?? 'Error al crear la orden')
     // Cooldown de 4 segundos para evitar doble envío accidental
     cooldown.value = 4
     clearInterval(cooldownTimer)
@@ -370,7 +383,8 @@ function removeFacturaFoto() {
 </script>
 
 <template>
-  <div class="p-4 max-w-lg mx-auto space-y-4 pb-8">
+  <div>
+    <div class="p-4 max-w-lg mx-auto space-y-4 pb-8">
 
     <!-- Cabecera + progreso -->
     <div class="flex items-center gap-3">
@@ -389,6 +403,26 @@ function removeFacturaFoto() {
         :class="['h-1 flex-1 rounded-full transition-colors',
           n <= step ? 'bg-blue-600' : 'bg-gray-200']"
       />
+    </div>
+
+    <!-- Firma del vendedor requerida -->
+    <div
+      v-if="!auth.isSupervisor && !auth.usuario?.firma_url"
+      class="bg-amber-50 border border-amber-300 rounded-xl p-4 flex flex-col gap-3"
+    >
+      <div class="flex items-start gap-3">
+        <ExclamationTriangleIcon class="w-6 h-6 text-amber-500 flex-shrink-0" />
+        <div>
+          <p class="font-semibold text-amber-800 text-sm">Registra tu firma antes de crear órdenes</p>
+          <p class="text-xs text-amber-700 mt-0.5">Tu firma aparece en la cotización del cliente. Es obligatoria para poder generar órdenes.</p>
+        </div>
+      </div>
+      <button
+        @click="router.push({ name: 'perfil' })"
+        class="w-full bg-amber-500 hover:bg-amber-600 text-white rounded-lg py-2.5 text-sm font-semibold transition-colors"
+      >
+        Ir a Mi Perfil → Registrar firma
+      </button>
     </div>
 
     <!-- ═══════════════════════════════════════════════════════ PASO 1 ══ -->
@@ -579,7 +613,7 @@ function removeFacturaFoto() {
 
       <button
         @click="step = 2"
-        :disabled="!paso1Valido()"
+        :disabled="!paso1Valido() || (!auth.isSupervisor && !auth.usuario?.firma_url)"
         class="btn-primary w-full mt-2"
       >Continuar → Productos</button>
     </template>
@@ -639,7 +673,7 @@ function removeFacturaFoto() {
               {{ p.categoria }}
               <span v-if="tiendaBusqueda && tiendaBusqueda != tiendaId"
                 class="ml-1.5 bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded-full font-medium">
-                📍 {{ nombreTiendaBusqueda() }}
+                <MapPinIcon class="w-3.5 h-3.5 inline-block mr-0.5 -mt-0.5" />{{ nombreTiendaBusqueda() }}
               </span>
             </p>
             <p class="text-xs mt-0.5"
@@ -679,11 +713,11 @@ function removeFacturaFoto() {
               <div class="flex flex-wrap items-center gap-1 mt-0.5">
                 <span v-if="item.variante_label"
                   class="bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded-full text-xs font-medium">
-                  🧵 {{ item.variante_label }}
+                  <SwatchIcon class="w-3 h-3 inline-block mr-0.5 -mt-0.5" />{{ item.variante_label }}
                 </span>
                 <span v-if="item.tienda_origen"
                   class="bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded-full font-medium text-xs">
-                  📍 {{ item.tienda_origen }}
+                  <MapPinIcon class="w-3.5 h-3.5 inline-block mr-0.5 -mt-0.5" />{{ item.tienda_origen }}
                 </span>
                 <span v-if="!item.variante_label && !item.tienda_origen" class="text-xs text-gray-400">
                   {{ item.categoria }}
@@ -714,23 +748,6 @@ function removeFacturaFoto() {
           </div>
 
           <!-- Fecha de entrega manual -->
-          <div>
-            <label class="text-xs text-gray-500">
-              Fecha de entrega prometida
-              <span class="text-red-500 ml-0.5">*</span>
-            </label>
-            <input
-              v-model="item.fecha_entrega_prometida"
-              type="date"
-              :min="hoy"
-              class="input text-sm"
-              :class="!item.fecha_entrega_prometida ? 'border-red-300' : ''"
-            />
-            <p v-if="!item.fecha_entrega_prometida" class="text-xs text-red-500 mt-0.5">
-              Requerida para continuar
-            </p>
-          </div>
-
           <label class="flex items-center gap-2 text-sm text-gray-600 cursor-pointer">
             <input type="checkbox" v-model="item.es_personalizado" class="rounded" />
             Ítem personalizado
@@ -739,10 +756,48 @@ function removeFacturaFoto() {
           <textarea
             v-if="item.es_personalizado"
             v-model="item.specs_descripcion"
-            placeholder="Descripción de personalización (tela, medidas, color...)"
-            rows="2"
+            placeholder="Especificaciones y medidas (tela, dimensiones, color...)"
+            rows="3"
             class="input text-sm resize-none"
           />
+
+          <!-- Boceto del producto personalizado -->
+          <div v-if="item.es_personalizado" class="space-y-1.5">
+            <div class="flex items-center justify-between">
+              <p class="text-xs font-medium text-purple-700">
+                Boceto del producto
+                <span class="text-gray-400 font-normal">(opcional)</span>
+              </p>
+              <button
+                v-if="item.boceto_preview"
+                type="button"
+                @click="onBocetoUpdate(item, null)"
+                class="text-xs text-red-500 hover:underline"
+              >Quitar boceto</button>
+            </div>
+
+            <!-- Preview del boceto ya guardado -->
+            <div v-if="item.boceto_preview" class="relative">
+              <img
+                :src="item.boceto_preview"
+                alt="Boceto"
+                class="w-full rounded-lg border-2 border-purple-300 object-contain bg-white"
+                style="max-height: 200px;"
+              />
+              <button
+                type="button"
+                @click="onBocetoUpdate(item, null)"
+                class="absolute bottom-2 right-2 text-xs text-gray-500 bg-white border border-gray-200 rounded-md px-2 py-1 hover:bg-gray-50 shadow-sm"
+              >Re-dibujar</button>
+            </div>
+
+            <!-- Canvas para dibujar (solo si no hay boceto aún) -->
+            <BocetoCanvas
+              v-else
+              :modelValue="item.boceto_blob"
+              @update:modelValue="onBocetoUpdate(item, $event)"
+            />
+          </div>
 
           <p class="text-xs text-right text-gray-500">
             Subtotal: <strong class="text-gray-800">
@@ -772,19 +827,6 @@ function removeFacturaFoto() {
     <!-- ═══════════════════════════════════════════════════════ PASO 3 ══ -->
     <template v-else-if="step === 3">
 
-      <!-- Alerta: firma del vendedor no registrada -->
-      <div v-if="!auth.usuario?.firma_url" class="bg-amber-50 border border-amber-300 rounded-xl px-4 py-3 flex items-start gap-3">
-        <span class="text-xl mt-0.5">⚠️</span>
-        <div class="flex-1">
-          <p class="text-sm font-semibold text-amber-800">Tu firma no está registrada</p>
-          <p class="text-xs text-amber-700 mt-0.5">El PDF de la orden requiere tu firma. Regístrala antes de continuar.</p>
-          <button
-            type="button"
-            @click="router.push({ name: 'perfil' })"
-            class="mt-2 text-xs font-semibold text-amber-800 underline"
-          >Ir a Mi Perfil →</button>
-        </div>
-      </div>
 
       <!-- Resumen de orden -->
       <div class="bg-white rounded-xl shadow-sm p-4 space-y-1">
@@ -883,29 +925,35 @@ function removeFacturaFoto() {
       <!-- Foto de factura -->
       <div>
         <label class="label">Foto de la factura (opcional)</label>
-        <div v-if="facturaFotoFile" class="mb-2">
-          <div class="relative inline-block">
+        <div v-if="facturaFotoFile" class="space-y-2">
+          <div class="relative">
             <img
-              :src="facturaFotoUrl ? facturaFotoUrl : (facturaFotoFile ? URL.createObjectURL(facturaFotoFile) : '')"
-              alt="Factura"
-              class="w-full max-w-xs rounded-lg border border-gray-200 object-cover max-h-48"
+              :src="facturaFotoUrl || facturaFotoPreview"
+              alt="Vista previa factura"
+              class="w-full rounded-xl border-2 border-gray-200 object-contain bg-gray-50"
+              style="max-height: 240px;"
             />
             <button
               @click="removeFacturaFoto"
-              class="absolute -top-2 -right-2 bg-red-500 text-white rounded-full p-1"
+              class="absolute top-2 right-2 bg-red-500 text-white rounded-full p-1.5 shadow-lg"
             >
               <XMarkIcon class="w-4 h-4" />
             </button>
           </div>
-          <p v-if="subiendoFactura" class="text-xs text-blue-600 mt-1">Subiendo imagen...</p>
+          <p class="text-xs text-gray-400 truncate">{{ facturaFotoFile.name }}</p>
+          <p v-if="subiendoFactura" class="text-xs text-blue-600">Subiendo imagen...</p>
         </div>
-        <input
-          v-else
-          type="file"
-          accept="image/*"
-          @change="onFacturaFotoChange"
-          class="input cursor-pointer"
-        />
+        <label v-else class="flex flex-col items-center gap-2 border-2 border-dashed border-gray-300 rounded-xl p-6 cursor-pointer hover:border-blue-400 hover:bg-blue-50 transition-colors">
+          <PhotoIcon class="w-8 h-8 text-gray-300" />
+          <span class="text-sm text-gray-500">Toca para adjuntar foto de factura</span>
+          <span class="text-xs text-gray-400">JPG, PNG — máx 5 MB</span>
+          <input
+            type="file"
+            accept="image/*"
+            @change="onFacturaFotoChange"
+            class="hidden"
+          />
+        </label>
       </div>
 
       <!-- Firma del cliente -->
@@ -914,44 +962,15 @@ function removeFacturaFoto() {
           Firma del cliente
           <span class="text-red-500 ml-0.5">*</span>
         </label>
-
-        <!-- Firma guardada en uso -->
-        <div v-if="usandoFirmaGuardada && auth.usuario?.firma_url" class="space-y-2">
-          <div class="bg-gray-50 border border-gray-200 rounded-lg p-3 inline-block">
-            <img :src="auth.usuario.firma_url" alt="Mi firma" class="h-16 max-w-xs object-contain" />
-          </div>
-          <div class="flex items-center gap-3">
-            <span class="text-xs text-green-600 font-medium">Usando tu firma guardada</span>
-            <button type="button" @click="cambiarFirma" class="text-xs text-blue-600 hover:underline">
-              Usar otra
-            </button>
-          </div>
-        </div>
-
-        <!-- Canvas para nueva firma -->
-        <div v-else class="space-y-1.5">
-          <FirmaCanvas v-model="firmaBlob" />
-          <div class="flex items-center justify-between">
-            <p v-if="!firmaBlob" class="text-xs text-amber-600 flex items-center gap-1">
-              <span>⚠️</span> Se requiere la firma para confirmar la orden
-            </p>
-            <button
-              v-if="auth.usuario?.firma_url"
-              type="button"
-              @click="usarFirmaGuardada"
-              class="text-xs text-blue-600 hover:underline ml-auto"
-            >
-              Usar mi firma guardada
-            </button>
-          </div>
-        </div>
+        <FirmaCanvas v-model="firmaBlob" />
+        <p v-if="!firmaBlob" class="text-xs text-amber-600 flex items-center gap-1 mt-1">
+          <ExclamationTriangleIcon class="w-4 h-4 text-amber-500 inline-block mr-1" />Se requiere la firma del cliente para confirmar la orden
+        </p>
       </div>
-
-      <p v-if="errSubmit" class="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{{ errSubmit }}</p>
 
        <button
          @click="submit"
-         :disabled="submitting || subiendoFactura || cooldown > 0 || !auth.usuario?.firma_url || anticipo_monto < minimoAnticipo || (!usandoFirmaGuardada && !firmaBlob)"
+         :disabled="submitting || subiendoFactura || cooldown > 0 || anticipo_monto < minimoAnticipo || !firmaBlob"
          class="btn-primary w-full text-base py-3 flex items-center justify-center gap-2"
        >
          <ArrowPathOutlineIcon v-if="submitting || subiendoFactura" class="w-5 h-5 animate-spin" />
@@ -1058,6 +1077,7 @@ function removeFacturaFoto() {
       </div>
     </div>
   </Transition>
+  </div>
 </template>
 
 <style scoped>
