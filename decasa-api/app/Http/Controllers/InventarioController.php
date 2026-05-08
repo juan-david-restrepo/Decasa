@@ -33,30 +33,51 @@ class InventarioController extends Controller
             'tienda_id' => 'exists:tiendas,id',
         ]);
 
-        $query = Inventario::with('producto:id,nombre,categoria,precio_base,foto_url,personalizable,activo')
-            ->where('tienda_id', $tiendaId)
-            ->whereHas('producto', fn($q) => $q->where('activo', true));
+        $tid = (int) $tiendaId;
+
+        $query = DB::table('productos')
+            ->leftJoin('inventario', function ($join) use ($tid) {
+                $join->on('inventario.producto_id', '=', 'productos.id')
+                     ->where('inventario.tienda_id', '=', $tid);
+            })
+            ->where('productos.activo', true)
+            ->select(
+                DB::raw('COALESCE(inventario.id, 0) as id'),
+                'productos.id as producto_id',
+                DB::raw("{$tid} as tienda_id"),
+                DB::raw('COALESCE(inventario.cantidad_disponible, 0) as cantidad_disponible'),
+                DB::raw('COALESCE(inventario.cantidad_reservada, 0) as cantidad_reservada'),
+                DB::raw('COALESCE(inventario.stock_minimo, 0) as stock_minimo'),
+                'productos.nombre as prod_nombre',
+                'productos.categoria as prod_categoria',
+                'productos.precio_base as prod_precio_base',
+                'productos.foto_url as prod_foto_url',
+                'productos.personalizable as prod_personalizable',
+            )
+            ->orderBy('productos.nombre');
 
         if ($search) {
             $term = "%{$search}%";
-            $query->whereHas('producto', function ($q) use ($term) {
-                $q->where('nombre', 'like', $term)
-                  ->orWhere('categoria', 'like', $term);
+            $query->where(function ($q) use ($term) {
+                $q->where('productos.nombre', 'like', $term)
+                  ->orWhere('productos.categoria', 'like', $term);
             });
         }
 
-        $inventario = $query
-            ->orderBy(
-                DB::raw("(SELECT nombre FROM productos WHERE productos.id = inventario.producto_id)")
-            )
-            ->get()
-            ->map(function ($inv) {
-                $inv->stock_libre = $inv->cantidad_disponible - $inv->cantidad_reservada;
-                $inv->bajo_stock  = $inv->cantidad_disponible <= $inv->stock_minimo;
-                return $inv;
-            });
-
-        return response()->json($inventario);
+        return response()->json($query->paginate(20)->through(function ($inv) {
+            $inv->stock_libre = $inv->cantidad_disponible - $inv->cantidad_reservada;
+            $inv->bajo_stock  = $inv->cantidad_disponible <= $inv->stock_minimo;
+            $inv->producto = (object) [
+                'id'             => $inv->producto_id,
+                'nombre'         => $inv->prod_nombre,
+                'categoria'      => $inv->prod_categoria,
+                'precio_base'    => (float) $inv->prod_precio_base,
+                'foto_url'       => $inv->prod_foto_url,
+                'personalizable' => (bool) $inv->prod_personalizable,
+                'activo'         => true,
+            ];
+            return $inv;
+        }));
     }
 
     /**
@@ -64,8 +85,8 @@ class InventarioController extends Controller
      */
     private function inventarioTodas($search = null)
     {
-        $query = DB::table('inventario')
-            ->join('productos', 'productos.id', '=', 'inventario.producto_id')
+        $query = DB::table('productos')
+            ->leftJoin('inventario', 'inventario.producto_id', '=', 'productos.id')
             ->where('productos.activo', true)
             ->select(
                 'productos.id as producto_id',
@@ -74,9 +95,9 @@ class InventarioController extends Controller
                 'productos.precio_base',
                 'productos.foto_url',
                 'productos.personalizable',
-                DB::raw('SUM(inventario.cantidad_disponible) as cantidad_disponible'),
-                DB::raw('SUM(inventario.cantidad_reservada) as cantidad_reservada'),
-                DB::raw('COUNT(DISTINCT inventario.tienda_id) as tiendas_count')
+                DB::raw('COALESCE(SUM(inventario.cantidad_disponible), 0) as cantidad_disponible'),
+                DB::raw('COALESCE(SUM(inventario.cantidad_reservada), 0) as cantidad_reservada'),
+                DB::raw('COUNT(DISTINCT inventario.tienda_id) as tiendas_count'),
             )
             ->groupBy(
                 'productos.id',
@@ -84,7 +105,7 @@ class InventarioController extends Controller
                 'productos.categoria',
                 'productos.precio_base',
                 'productos.foto_url',
-                'productos.personalizable'
+                'productos.personalizable',
             );
 
         if ($search) {
@@ -95,31 +116,32 @@ class InventarioController extends Controller
             });
         }
 
-        $results = $query
+        return response()->json($query
             ->orderBy('productos.nombre')
-            ->get()
-            ->map(function ($inv) {
+            ->paginate(20)
+            ->through(function ($inv) {
+                $disp = (int) $inv->cantidad_disponible;
+                $res  = (int) $inv->cantidad_reservada;
                 return (object) [
                     'id'                  => $inv->producto_id,
                     'producto_id'         => $inv->producto_id,
-                    'cantidad_disponible' => $inv->cantidad_disponible,
-                    'cantidad_reservada'  => $inv->cantidad_reservada,
-                    'stock_libre'         => $inv->cantidad_disponible - $inv->cantidad_reservada,
+                    'cantidad_disponible' => $disp,
+                    'cantidad_reservada'  => $res,
+                    'stock_libre'         => $disp - $res,
                     'stock_minimo'        => 0,
                     'bajo_stock'          => false,
-                    'tiendas_count'       => $inv->tiendas_count,
+                    'tiendas_count'       => (int) $inv->tiendas_count,
                     'producto'            => (object) [
                         'id'             => $inv->producto_id,
                         'nombre'         => $inv->nombre,
                         'categoria'      => $inv->categoria,
-                        'precio_base'    => $inv->precio_base,
+                        'precio_base'    => (float) $inv->precio_base,
                         'foto_url'       => $inv->foto_url,
                         'personalizable' => (bool) $inv->personalizable,
+                        'activo'         => true,
                     ],
                 ];
-            });
-
-        return response()->json($results);
+            }));
     }
 
     /**
@@ -146,10 +168,13 @@ class InventarioController extends Controller
             'tienda_id' => 'exists:tiendas,id',
         ]);
 
-        DB::transaction(function () use ($data, $request) {
-            Inventario::where('producto_id', $data['producto_id'])
-                ->where('tienda_id', $data['tienda_id'])
-                ->increment('cantidad_disponible', $data['cantidad']);
+        $inv = DB::transaction(function () use ($data, $request) {
+            $inv = Inventario::firstOrCreate(
+                ['producto_id' => $data['producto_id'], 'tienda_id' => $data['tienda_id']],
+                ['cantidad_disponible' => 0, 'cantidad_reservada' => 0, 'stock_minimo' => 0]
+            );
+
+            $inv->increment('cantidad_disponible', $data['cantidad']);
 
             InventarioMovimiento::create([
                 'producto_id' => $data['producto_id'],
@@ -159,15 +184,13 @@ class InventarioController extends Controller
                 'motivo'      => $data['motivo'] ?? 'Entrada manual',
                 'usuario_id'  => $request->user()->id,
             ]);
+
+            return $inv;
         });
 
         event(new InventarioActualizado((int) $data['tienda_id'], (int) $data['producto_id'], 'entrada'));
 
-        $inv = Inventario::with('producto:id,nombre,categoria')
-            ->where('producto_id', $data['producto_id'])
-            ->where('tienda_id', $data['tienda_id'])
-            ->first();
-
+        $inv->load('producto:id,nombre,categoria');
         $inv->stock_libre = $inv->cantidad_disponible - $inv->cantidad_reservada;
         $inv->bajo_stock  = $inv->cantidad_disponible <= $inv->stock_minimo;
 
@@ -226,5 +249,23 @@ class InventarioController extends Controller
             'tiendas_count'       => $inventario->count(),
             'tiendas_afectadas'   => $inventario->count(),
         ], 201);
+    }
+
+    public function movimientos(Request $request, int $productoId)
+    {
+        $tiendaId = $request->user()->tienda_default_id;
+
+        if ($request->user()->rol === 'supervisor' && $request->query('tienda_id')) {
+            $tiendaId = (int) $request->query('tienda_id');
+        }
+
+        $movimientos = InventarioMovimiento::with('usuario:id,nombre')
+            ->where('producto_id', $productoId)
+            ->where('tienda_id', $tiendaId)
+            ->orderByDesc('created_at')
+            ->limit(50)
+            ->get();
+
+        return response()->json($movimientos);
     }
 }

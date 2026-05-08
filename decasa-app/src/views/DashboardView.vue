@@ -12,25 +12,45 @@ import {
   WrenchScrewdriverIcon,
   ChartBarIcon,
   PresentationChartLineIcon,
+  TruckIcon,
 } from '@heroicons/vue/24/outline'
 
 const auth   = useAuthStore()
 const router = useRouter()
 
-const accesos = computed(() => [
-  { label: 'Nueva orden',  icon: PlusIcon, to: { name: 'nueva-orden' } },
-  { label: 'Órdenes',      icon: ClipboardDocumentListIcon, to: { name: 'ordenes' } },
-  { label: 'Clientes',     icon: UserGroupIcon, to: { name: 'clientes' } },
-  { label: 'Inventario',   icon: ArchiveBoxIcon, to: { name: 'inventario' } },
-  { label: 'Producción',   icon: WrenchScrewdriverIcon, to: { name: 'produccion' } },
-  { label: auth.isSupervisor ? 'Mis estadísticas' : 'Estadísticas', icon: PresentationChartLineIcon, to: { name: 'mis-stats' } },
-])
+const accesos = computed(() => {
+  if (auth.usuario?.rol === 'conductor') {
+    return [
+      { label: 'Mis entregas', icon: TruckIcon, to: { name: 'mis-entregas' } },
+      { label: 'Estadísticas', icon: PresentationChartLineIcon, to: { name: 'mis-stats' } },
+    ]
+  }
 
-const accesosAdmin = [
-  { label: 'Vendedores',     icon: UsersIcon, to: { name: 'usuarios' } },
-  { label: 'Nuevo vendedor', icon: UserPlusIcon, to: { name: 'usuario-crear' } },
-  { label: 'Reportes',       icon: ChartBarIcon, to: { name: 'reportes' } },
-]
+  const items = [
+    { label: 'Nueva orden',  icon: PlusIcon, to: { name: 'nueva-orden' } },
+    { label: 'Órdenes',      icon: ClipboardDocumentListIcon, to: { name: 'ordenes' } },
+    { label: 'Clientes',     icon: UserGroupIcon, to: { name: 'clientes' } },
+    { label: 'Inventario',   icon: ArchiveBoxIcon, to: { name: 'inventario' } },
+  ]
+
+  if (auth.isSupervisor) {
+    items.push({ label: 'Producción', icon: WrenchScrewdriverIcon, to: { name: 'produccion' } })
+  }
+
+  items.push({ label: auth.isSupervisor ? 'Mis estadísticas' : 'Estadísticas', icon: PresentationChartLineIcon, to: { name: 'mis-stats' } })
+
+  return items
+})
+
+const accesosAdmin = computed(() => {
+  if (!auth.isSupervisor) return []
+  return [
+    { label: 'Despacho',      icon: TruckIcon, to: { name: 'despacho' } },
+    { label: 'Trabajadores',    icon: UsersIcon, to: { name: 'usuarios' } },
+    { label: 'Nuevo trabajador', icon: UserPlusIcon, to: { name: 'usuario-crear' } },
+    { label: 'Reportes',      icon: ChartBarIcon, to: { name: 'reportes' } },
+  ]
+})
 </script>
 
 <template>

@@ -12,11 +12,7 @@ class NotificacionController extends Controller
         $u = $request->user();
         $q = Notificacion::orderByDesc('created_at')->take(50);
 
-        if ($u->rol === 'supervisor') {
-            $q->whereNull('usuario_id');
-        } else {
-            $q->where('usuario_id', $u->id);
-        }
+        $q->where('usuario_id', $u->id);
 
         return response()->json($q->get());
     }
@@ -37,13 +33,7 @@ class NotificacionController extends Controller
     public function marcarTodas(Request $request)
     {
         $u = $request->user();
-        $q = Notificacion::where('leida', false);
-
-        if ($u->rol === 'supervisor') {
-            $q->whereNull('usuario_id');
-        } else {
-            $q->where('usuario_id', $u->id);
-        }
+        $q = Notificacion::where('leida', false)->where('usuario_id', $u->id);
 
         $q->update(['leida' => true]);
         return response()->json(['ok' => true]);

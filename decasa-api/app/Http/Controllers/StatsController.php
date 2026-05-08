@@ -121,7 +121,7 @@ class StatsController extends Controller
         $f          = $this->parseFechas($request);
         $tiendaId   = $request->query('tienda_id');
         $agrupado   = $request->query('agrupado', 'dia');
-        $vendedorId = $user->rol === 'vendedor' ? $user->id : null;
+        $vendedorId = $request->query('vendedor_id', $user->rol === 'vendedor' ? $user->id : null);
 
         $desde = $f['desde'];
         $hasta = $f['hasta'];
@@ -388,24 +388,89 @@ class StatsController extends Controller
         return response()->json($perfil);
     }
 
-    // ─── Perfil individual reutilizable ──────────────────────────────────────
+    // ─── GET /api/stats/conductor ────────────────────────────────────────────
 
-    private function perfilVendedor(int $vendedorId, string $desde, string $hasta): array
+    public function statsConductor(Request $request)
+    {
+        $f         = $this->parseFechas($request);
+        $conductor = $request->user();
+        $rango     = [$f['desde'] . ' 00:00:00', $f['hasta'] . ' 23:59:59'];
+
+        $entregas = DB::table('despacho_items as di')
+            ->join('despachos as d', 'd.id', '=', 'di.despacho_id')
+            ->where('d.conductor_id', $conductor->id)
+            ->where('di.estado', 'entregado')
+            ->whereBetween('di.entregado_at', $rango)
+            ->count();
+
+        $cobrado = (float) DB::table('pagos as p')
+            ->join('ordenes as o',        'o.id',  '=', 'p.orden_id')
+            ->join('despacho_items as di', 'di.orden_id', '=', 'o.id')
+            ->join('despachos as d',       'd.id',  '=', 'di.despacho_id')
+            ->where('d.conductor_id', $conductor->id)
+            ->whereBetween('p.created_at', $rango)
+            ->sum('p.monto');
+
+        $pendientes = DB::table('despacho_items as di')
+            ->join('despachos as d', 'd.id', '=', 'di.despacho_id')
+            ->where('d.conductor_id', $conductor->id)
+            ->whereIn('d.estado', ['asignado', 'en_ruta'])
+            ->where('di.estado', 'pendiente')
+            ->count();
+
+        $tendenciaRaw = DB::table('despacho_items as di')
+            ->join('despachos as d', 'd.id', '=', 'di.despacho_id')
+            ->where('d.conductor_id', $conductor->id)
+            ->where('di.estado', 'entregado')
+            ->whereBetween('di.entregado_at', $rango)
+            ->selectRaw("DATE(di.entregado_at) AS dia, COUNT(*) AS total")
+            ->groupBy('dia')->orderBy('dia')
+            ->get()->keyBy('dia');
+
+        $labels = $serie = [];
+        $cursor = Carbon::parse($f['desde']);
+        $fin    = Carbon::parse($f['hasta']);
+        while ($cursor->lte($fin)) {
+            $key      = $cursor->toDateString();
+            $labels[] = $key;
+            $serie[]  = (int) ($tendenciaRaw->get($key)?->total ?? 0);
+            $cursor->addDay();
+        }
+
+        $recientes = DB::table('despacho_items as di')
+            ->join('despachos as d', 'd.id', '=', 'di.despacho_id')
+            ->join('ordenes as o',   'o.id', '=', 'di.orden_id')
+            ->join('clientes as c',  'c.id', '=', 'o.cliente_id')
+            ->where('d.conductor_id', $conductor->id)
+            ->where('di.estado', 'entregado')
+            ->selectRaw('di.id, o.id AS orden_id, c.nombre AS cliente, c.direccion, o.valor_total, di.entregado_at')
+            ->orderByDesc('di.entregado_at')
+            ->limit(15)
+            ->get();
+
+        return response()->json([
+            'conductor'  => ['nombre' => $conductor->nombre],
+            'periodo'    => ['desde' => $f['desde'], 'hasta' => $f['hasta']],
+            'entregas'   => $entregas,
+            'cobrado'    => $cobrado,
+            'pendientes' => $pendientes,
+            'tendencia'  => ['labels' => $labels, 'serie' => $serie],
+            'recientes'  => $recientes,
+        ]);
+    }
+
+    // ─── Perfil genérico (por columna + valor) ──────────────────────────────
+
+    private function perfilPor(string $columna, int $valor, string $desde, string $hasta): array
     {
         $rango = [$desde . ' 00:00:00', $hasta . ' 23:59:59'];
 
-        $vendedor = DB::table('usuarios as u')
-            ->leftJoin('tiendas as t', 't.id', '=', 'u.tienda_default_id')
-            ->where('u.id', $vendedorId)
-            ->selectRaw('u.id, u.nombre, u.email, u.rol, t.nombre AS tienda, t.id AS tienda_id')
-            ->first();
-
         $ingresos = (float) DB::table('pagos as p')
             ->join('ordenes as o', 'o.id', '=', 'p.orden_id')
-            ->where('o.vendedor_id', $vendedorId)->whereBetween('p.created_at', $rango)
+            ->where("o.$columna", $valor)->whereBetween('p.created_at', $rango)
             ->sum('p.monto');
 
-        $ord = DB::table('ordenes')->where('vendedor_id', $vendedorId)
+        $ord = DB::table('ordenes')->where($columna, $valor)
             ->whereBetween('created_at', $rango)
             ->selectRaw('
                 COUNT(*)                                        AS total,
@@ -418,7 +483,7 @@ class StatsController extends Controller
 
         $cartera = (float) DB::table('v_saldo_ordenes as v')
             ->join('ordenes as o', 'o.id', '=', 'v.orden_id')
-            ->where('o.vendedor_id', $vendedorId)
+            ->where("o.$columna", $valor)
             ->where('v.saldo_pendiente', '>', 0)
             ->whereNotIn('o.estado', ['entregado', 'cancelado'])
             ->sum('v.saldo_pendiente');
@@ -426,7 +491,7 @@ class StatsController extends Controller
         $topProductos = DB::table('orden_items as oi')
             ->join('ordenes as o',  'o.id',  '=', 'oi.orden_id')
             ->join('productos as p', 'p.id', '=', 'oi.producto_id')
-            ->where('o.vendedor_id', $vendedorId)
+            ->where("o.$columna", $valor)
             ->whereBetween('o.created_at', $rango)
             ->whereNotIn('o.estado', ['cancelado'])
             ->selectRaw('p.id, p.nombre, p.categoria, SUM(oi.cantidad) AS cantidad, SUM(oi.cantidad * oi.precio_unitario) AS valor_total')
@@ -436,17 +501,15 @@ class StatsController extends Controller
         $ordenesRecientes = DB::table('ordenes as o')
             ->join('clientes as c', 'c.id', '=', 'o.cliente_id')
             ->leftJoin('v_saldo_ordenes as v', 'v.orden_id', '=', 'o.id')
-            ->where('o.vendedor_id', $vendedorId)
+            ->where("o.$columna", $valor)
             ->selectRaw('o.id, c.nombre AS cliente, o.estado, o.valor_total, COALESCE(v.saldo_pendiente, o.valor_total) AS saldo_pendiente, o.created_at')
             ->orderByDesc('o.created_at')->limit(5)->get();
 
-        $canales = DB::table('ordenes')->where('vendedor_id', $vendedorId)
+        $canales = DB::table('ordenes')->where($columna, $valor)
             ->whereBetween('created_at', $rango)
             ->selectRaw('canal, COUNT(*) AS total')->groupBy('canal')->get();
 
         return [
-            'vendedor'           => $vendedor,
-            'periodo'            => ['desde' => $desde, 'hasta' => $hasta],
             'dinero_vendido'     => $ingresos,
             'ordenes_creadas'    => (int) ($ord->total      ?? 0),
             'ordenes_entregadas' => $entregadas,
@@ -458,5 +521,21 @@ class StatsController extends Controller
             'ordenes_recientes'  => $ordenesRecientes,
             'canales'            => $canales,
         ];
+    }
+
+    // ─── Perfil individual por vendedor ─────────────────────────────────────
+
+    private function perfilVendedor(int $vendedorId, string $desde, string $hasta): array
+    {
+        $vendedor = DB::table('usuarios as u')
+            ->leftJoin('tiendas as t', 't.id', '=', 'u.tienda_default_id')
+            ->where('u.id', $vendedorId)
+            ->selectRaw('u.id, u.nombre, u.email, u.rol, t.nombre AS tienda, t.id AS tienda_id')
+            ->first();
+
+        $data = $this->perfilPor('vendedor_id', $vendedorId, $desde, $hasta);
+        $data['vendedor'] = $vendedor;
+        $data['periodo'] = ['desde' => $desde, 'hasta' => $hasta];
+        return $data;
     }
 }

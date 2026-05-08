@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Events\InventarioActualizado;
 use App\Events\OrdenActualizada;
+use App\Events\OrdenListaParaEntrega;
 use App\Mail\CotizacionMail;
 use App\Services\NotificacionService;
 use App\Models\Inventario;
@@ -37,7 +38,17 @@ class OrdenController extends Controller
         ])->withSum('pagos', 'monto');
 
         if ($usuario->rol === 'vendedor') {
-            $query->where('vendedor_id', $usuario->id);
+            if ($usuario->facturacion) {
+                $query->where(function ($q) use ($usuario) {
+                    $q->where('vendedor_id', $usuario->id)
+                      ->orWhere(function ($q2) use ($usuario) {
+                          $q2->where('tienda_id', $usuario->tienda_default_id)
+                              ->where('estado', 'entregado');
+                      });
+                });
+            } else {
+                $query->where('vendedor_id', $usuario->id);
+            }
         }
 
         if ($v = $request->query('estado')) {
@@ -311,6 +322,16 @@ class OrdenController extends Controller
 
         // Notificar a vendedores de la tienda fuente cuando se usa su stock
         foreach (array_unique($origenesExternos) as $origenId) {
+            $itemsOrigen = $ordenCargada->items
+                ->where('tienda_origen_id', $origenId)
+                ->where('es_personalizado', false);
+
+            $productosStr = $itemsOrigen
+                ->map(fn($i) => "{$i->producto->nombre} ({$i->cantidad})")
+                ->implode(', ');
+
+            $productosIds = $itemsOrigen->pluck('producto_id')->values();
+
             $vendedoresOrigen = Usuario::where('tienda_default_id', $origenId)
                 ->where('rol', 'vendedor')
                 ->where('activo', true)
@@ -320,8 +341,12 @@ class OrdenController extends Controller
                 NotificacionService::crear(
                     'venta_otra_tienda',
                     'Venta desde otra tienda',
-                    "Orden #{$orden->id} de {$ordenCargada->cliente->nombre} usó stock de tu tienda",
-                    ['orden_id' => $orden->id, 'tienda_id' => $origenId],
+                    "Orden #{$orden->id} - {$productosStr}",
+                    [
+                        'orden_id'  => $orden->id,
+                        'tienda_id' => $origenId,
+                        'productos' => $productosIds,
+                    ],
                     $vendedorId,
                 );
             }
@@ -379,16 +404,204 @@ class OrdenController extends Controller
             'items.producto:id,nombre,categoria,precio_base,personalizable,foto_url,medidas,material',
             'items.produccion',
             'pagos',
+            'ediciones.usuario:id,nombre',
         ])->findOrFail($id);
 
         if ($usuario->rol === 'vendedor' && $orden->vendedor_id !== $usuario->id) {
-            return response()->json(['message' => 'No autorizado.'], 403);
+            if (!$usuario->facturacion || $orden->tienda_id !== $usuario->tienda_default_id || $orden->estado !== 'entregado') {
+                return response()->json(['message' => 'No autorizado.'], 403);
+            }
         }
 
         $orden->total_pagado    = $orden->totalPagado();
         $orden->saldo_pendiente = $orden->saldoPendiente();
 
         return response()->json($orden);
+    }
+
+    /**
+     * PATCH /api/ordenes/{id}
+     * Edita datos de la orden (notas, canal, ítems).
+     * Solo disponible en estados pendiente_anticipo y en_produccion.
+     * Registra auditoría en orden_ediciones.
+     */
+    public function update(Request $request, int $id)
+    {
+        $usuario = $request->user();
+
+        $data = $request->validate([
+            'notas'                         => 'sometimes|nullable|string|max:1000',
+            'canal'                         => 'sometimes|nullable|in:fisica,whatsapp,red_social,otro',
+            'items'                         => 'sometimes|nullable|array',
+            'items.*.id'                    => 'required_with:items|integer|exists:orden_items,id',
+            'items.*.specs_personalizacion' => 'sometimes|nullable|array',
+            'items.*.precio_unitario'       => 'sometimes|nullable|numeric|min:0',
+            'items.*.fecha_entrega_prom'    => 'sometimes|nullable|date',
+            'items.*.cantidad'              => 'sometimes|nullable|integer|min:1',
+            'items.*.producto_id'           => 'sometimes|nullable|exists:productos,id',
+        ]);
+
+        $orden = Orden::with(['items', 'items.producto:id,nombre'])->findOrFail($id);
+
+        if ($usuario->rol === 'vendedor' && $orden->vendedor_id !== $usuario->id) {
+            return response()->json(['message' => 'No autorizado.'], 403);
+        }
+
+        if (! in_array($orden->estado, ['pendiente_anticipo', 'en_produccion'])) {
+            return response()->json([
+                'message' => 'No se puede editar una orden en estado "' . $orden->estado . '".',
+            ], 422);
+        }
+
+        $cambios = [];
+
+        DB::transaction(function () use ($data, $orden, $usuario, &$cambios) {
+            $updateOrden = [];
+
+            // ── Cambios a nivel de orden ──────────────────────────────────────
+            if (array_key_exists('notas', $data) && $data['notas'] !== $orden->notas) {
+                $cambios[] = ['campo' => 'notas', 'label' => 'Notas', 'antes' => $orden->notas, 'despues' => $data['notas']];
+                $updateOrden['notas'] = $data['notas'];
+            }
+            if (array_key_exists('canal', $data) && $data['canal'] !== $orden->canal) {
+                $cambios[] = ['campo' => 'canal', 'label' => 'Canal', 'antes' => $orden->canal, 'despues' => $data['canal']];
+                $updateOrden['canal'] = $data['canal'];
+            }
+
+            // ── Cambios a nivel de ítems ──────────────────────────────────────
+            if (! empty($data['items'])) {
+                $idsDeOrden = $orden->items->pluck('id')->toArray();
+
+                foreach ($data['items'] as $itemData) {
+                    if (! in_array($itemData['id'], $idsDeOrden)) continue;
+
+                    $item          = $orden->items->firstWhere('id', $itemData['id']);
+                    $nombreProd    = $item->producto?->nombre ?? "Ítem #{$item->id}";
+                    $updateItem    = [];
+                    $origenId      = $item->tienda_origen_id ?? $orden->tienda_id;
+
+                    // Precio
+                    if (array_key_exists('precio_unitario', $itemData) && $itemData['precio_unitario'] !== null) {
+                        $nuevo  = (float) $itemData['precio_unitario'];
+                        $actual = (float) $item->precio_unitario;
+                        if ($nuevo !== $actual) {
+                            $cambios[]            = ['campo' => "item_{$item->id}_precio", 'label' => "{$nombreProd} — precio", 'antes' => $actual, 'despues' => $nuevo];
+                            $updateItem['precio_unitario'] = $nuevo;
+                        }
+                    }
+
+                    // Fecha entrega
+                    if (array_key_exists('fecha_entrega_prom', $itemData)) {
+                        $nueva  = $itemData['fecha_entrega_prom'];
+                        $actual = $item->fecha_entrega_prom ? substr((string) $item->fecha_entrega_prom, 0, 10) : null;
+                        if ($nueva !== $actual) {
+                            $cambios[]                      = ['campo' => "item_{$item->id}_fecha", 'label' => "{$nombreProd} — fecha entrega", 'antes' => $actual, 'despues' => $nueva];
+                            $updateItem['fecha_entrega_prom'] = $nueva;
+                            \App\Models\Produccion::where('orden_item_id', $item->id)->update(['fecha_compromiso' => $nueva]);
+                        }
+                    }
+
+                    // Specs (solo ítems personalizados)
+                    if ($item->es_personalizado && array_key_exists('specs_personalizacion', $itemData)) {
+                        $antes   = $item->specs_personalizacion;
+                        $despues = $itemData['specs_personalizacion'];
+                        if (json_encode($antes) !== json_encode($despues)) {
+                            $cambios[]                          = ['campo' => "item_{$item->id}_specs", 'label' => "{$nombreProd} — especificaciones", 'antes' => $antes, 'despues' => $despues];
+                            $updateItem['specs_personalizacion'] = $despues;
+                        }
+                    }
+
+                    // Cantidad y/o producto (solo ítems NO personalizados)
+                    if (! $item->es_personalizado) {
+                        $cantNueva     = isset($itemData['cantidad'])    ? (int)   $itemData['cantidad']    : (int) $item->cantidad;
+                        $prodNuevoId   = isset($itemData['producto_id']) ? (int)   $itemData['producto_id'] : null;
+                        $cambiaProducto = $prodNuevoId && $prodNuevoId !== (int) $item->producto_id;
+                        $cambiaCantidad = $cantNueva !== (int) $item->cantidad;
+
+                        if ($cambiaProducto) {
+                            // Verificar stock del nuevo producto
+                            $invNuevo   = Inventario::where('producto_id', $prodNuevoId)->where('tienda_id', $origenId)->lockForUpdate()->first();
+                            $stockLibre = $invNuevo ? ($invNuevo->cantidad_disponible - $invNuevo->cantidad_reservada) : 0;
+                            if ($stockLibre < $cantNueva) {
+                                abort(422, "Stock insuficiente para el nuevo producto. Stock libre: {$stockLibre}, necesario: {$cantNueva}.");
+                            }
+
+                            // Liberar reserva del producto anterior
+                            Inventario::where('producto_id', $item->producto_id)->where('tienda_id', $origenId)->decrement('cantidad_reservada', (int) $item->cantidad);
+                            InventarioMovimiento::create(['producto_id' => $item->producto_id, 'tienda_id' => $origenId, 'tipo' => 'liberacion', 'cantidad' => (int) $item->cantidad, 'motivo' => "Edición orden #{$orden->id} — cambio de producto", 'usuario_id' => $usuario->id]);
+
+                            // Reservar nuevo producto
+                            Inventario::where('producto_id', $prodNuevoId)->where('tienda_id', $origenId)->increment('cantidad_reservada', $cantNueva);
+                            InventarioMovimiento::create(['producto_id' => $prodNuevoId, 'tienda_id' => $origenId, 'tipo' => 'reserva', 'cantidad' => $cantNueva, 'motivo' => "Edición orden #{$orden->id} — nuevo producto", 'usuario_id' => $usuario->id]);
+
+                            $nombreNuevo = \App\Models\Producto::find($prodNuevoId)?->nombre ?? "Producto #{$prodNuevoId}";
+                            $cambios[]   = ['campo' => "item_{$item->id}_producto", 'label' => "Producto cambiado", 'antes' => $nombreProd, 'despues' => $nombreNuevo];
+                            $updateItem['producto_id'] = $prodNuevoId;
+                            $updateItem['variante_id'] = null;
+                            if ($cambiaCantidad) {
+                                $cambios[] = ['campo' => "item_{$item->id}_cantidad", 'label' => "{$nombreNuevo} — cantidad", 'antes' => (int) $item->cantidad, 'despues' => $cantNueva];
+                                $updateItem['cantidad'] = $cantNueva;
+                            }
+                        } elseif ($cambiaCantidad) {
+                            $diff = $cantNueva - (int) $item->cantidad;
+                            if ($diff > 0) {
+                                $inv        = Inventario::where('producto_id', $item->producto_id)->where('tienda_id', $origenId)->lockForUpdate()->first();
+                                $stockLibre = $inv ? ($inv->cantidad_disponible - $inv->cantidad_reservada) : 0;
+                                if ($stockLibre < $diff) {
+                                    abort(422, "Stock insuficiente. Stock libre: {$stockLibre}, necesita {$diff} adicionales.");
+                                }
+                                Inventario::where('producto_id', $item->producto_id)->where('tienda_id', $origenId)->increment('cantidad_reservada', $diff);
+                                InventarioMovimiento::create(['producto_id' => $item->producto_id, 'tienda_id' => $origenId, 'tipo' => 'reserva', 'cantidad' => $diff, 'motivo' => "Edición orden #{$orden->id} — ajuste cantidad", 'usuario_id' => $usuario->id]);
+                            } else {
+                                Inventario::where('producto_id', $item->producto_id)->where('tienda_id', $origenId)->decrement('cantidad_reservada', abs($diff));
+                                InventarioMovimiento::create(['producto_id' => $item->producto_id, 'tienda_id' => $origenId, 'tipo' => 'liberacion', 'cantidad' => abs($diff), 'motivo' => "Edición orden #{$orden->id} — ajuste cantidad", 'usuario_id' => $usuario->id]);
+                            }
+                            $cambios[] = ['campo' => "item_{$item->id}_cantidad", 'label' => "{$nombreProd} — cantidad", 'antes' => (int) $item->cantidad, 'despues' => $cantNueva];
+                            $updateItem['cantidad'] = $cantNueva;
+                        }
+                    }
+
+                    if (! empty($updateItem)) {
+                        $item->update($updateItem);
+                    }
+                }
+            }
+
+            // Recalcular valor total
+            $orden->refresh()->load('items');
+            $nuevoTotal = $orden->items->sum(fn ($i) => $i->cantidad * $i->precio_unitario);
+            if ((float) $nuevoTotal !== (float) $orden->valor_total) {
+                $cambios[]            = ['campo' => 'valor_total', 'label' => 'Total de la orden', 'antes' => (float) $orden->valor_total, 'despues' => (float) $nuevoTotal];
+                $updateOrden['valor_total'] = $nuevoTotal;
+            }
+
+            if (! empty($updateOrden)) {
+                $orden->update($updateOrden);
+            }
+
+            if (! empty($cambios)) {
+                \App\Models\OrdenEdicion::create([
+                    'orden_id'   => $orden->id,
+                    'usuario_id' => $usuario->id,
+                    'cambios'    => $cambios,
+                ]);
+            }
+        });
+
+        $ordenFresh = Orden::with([
+            'cliente',
+            'vendedor:id,nombre',
+            'tienda:id,nombre',
+            'items.producto:id,nombre,categoria,precio_base,personalizable,foto_url,medidas,material',
+            'items.produccion',
+            'pagos',
+            'ediciones.usuario:id,nombre',
+        ])->find($id);
+
+        $ordenFresh->total_pagado    = $ordenFresh->totalPagado();
+        $ordenFresh->saldo_pendiente = $ordenFresh->saldoPendiente();
+
+        return response()->json($ordenFresh);
     }
 
     /**
@@ -403,7 +616,7 @@ class OrdenController extends Controller
         $usuario = $request->user();
 
         $data = $request->validate([
-            'estado' => 'required|in:pendiente_anticipo,en_produccion,listo_entrega,entregado,cancelado',
+            'estado' => 'required|in:pendiente_anticipo,en_produccion,listo_entrega,en_despacho,entregado,cancelado',
         ]);
 
         if ($usuario->rol === 'vendedor') {
@@ -411,6 +624,13 @@ class OrdenController extends Controller
         }
 
         $orden = Orden::with('items')->findOrFail($id);
+
+        // Regla 8: Bloquear cambios si está en listo_entrega o en_despacho
+        if (in_array($orden->estado, ['listo_entrega', 'en_despacho'])) {
+            return response()->json([
+                'message' => 'Esta orden está en el módulo de Despacho. Solo puedes cambiar su estado desde allí.',
+            ], 403);
+        }
 
         $estadoAnterior = $orden->estado;
         $estadoNuevo    = $data['estado'];
@@ -482,7 +702,11 @@ class OrdenController extends Controller
                 }
             }
 
-            $orden->update(['estado' => $estadoNuevo]);
+            $updateData = ['estado' => $estadoNuevo];
+            if ($estadoNuevo === 'listo_entrega') {
+                $updateData['listo_entrega_at'] = now();
+            }
+            $orden->update($updateData);
         });
 
         $ordenFresh = $orden->fresh(['items.producto:id,nombre', 'items.produccion', 'pagos', 'cliente:id,nombre', 'tienda:id,nombre']);
@@ -493,6 +717,21 @@ class OrdenController extends Controller
             $estadoNuevo,
             $ordenFresh->cliente->nombre,
         ));
+
+        if ($estadoNuevo === 'listo_entrega') {
+            event(new OrdenListaParaEntrega(
+                $orden->id,
+                $ordenFresh->cliente->nombre,
+                $ordenFresh->listo_entrega_at?->toIso8601String() ?? now()->toIso8601String(),
+            ));
+
+            NotificacionService::crear(
+                'listo_entrega',
+                'Orden lista para entrega',
+                "Orden #{$orden->id} — {$ordenFresh->cliente->nombre} está lista para despachar",
+                ['orden_id' => $orden->id, 'tienda_id' => (int) $orden->tienda_id],
+            );
+        }
 
         if ($estadoNuevo === 'entregado') {
             // Supervisor
@@ -601,7 +840,9 @@ class OrdenController extends Controller
         ])->findOrFail($id);
 
         if ($usuario->rol === 'vendedor' && $orden->vendedor_id !== $usuario->id) {
-            return response()->json(['message' => 'No autorizado.'], 403);
+            if (!$usuario->facturacion || $orden->tienda_id !== $usuario->tienda_default_id || $orden->estado !== 'entregado') {
+                return response()->json(['message' => 'No autorizado.'], 403);
+            }
         }
 
         $orden->total_pagado    = $orden->totalPagado();

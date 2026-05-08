@@ -1,6 +1,6 @@
 ﻿<script setup>
 import { ref, computed, onMounted, nextTick } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import {
   MagnifyingGlassIcon,
@@ -11,7 +11,8 @@ import {
   PhotoIcon,
   XMarkIcon,
 } from '@heroicons/vue/24/outline'
-import { getInventario, addStock, getVariantes, crearVariante, addStockVariante } from '@/api/inventario'
+import { getInventario, addStock, getVariantes, crearVariante, addStockVariante, getMovimientos } from '@/api/inventario'
+import SurtidosPendientesPanel from '@/components/inventario/SurtidosPendientesPanel.vue'
 import { useRealtime } from '@/composables/useRealtime'
 import { TELAS_CATALOGO, marcasOrdenadas, tiposTelaDeM, coloresDeTela } from '@/data/telasCatalogo'
 import { getTiendas } from '@/api/ordenes'
@@ -20,16 +21,18 @@ import EmptyState from '@/components/common/EmptyState.vue'
 import api from '@/api'
 
 const router = useRouter()
+const route = useRoute()
 const auth = useAuthStore()
 
 const tiendas = ref([])
 const tiendaId = ref('')
 const inventario = ref([])
-const todosLosItems = ref([])
 const busqueda = ref('')
 const loading = ref(false)
-const pagina = ref(1)
+const currentPage = ref(1)
+const lastPage = ref(1)
 const tieneMas = ref(false)
+const loadingMore = ref(false)
 const mostrarGestionar = ref(false)
 const itemGestionar = ref(null)
 const mostrarAgregarStock = ref(false)
@@ -45,9 +48,30 @@ const stockLoading = ref(false)
 const fotoModal = ref(false)
 const fotoProducto = ref(null)
 
+const mostrarHistorial = ref(false)
+const itemHistorial = ref(null)
+const movimientos = ref([])
+const movimientosLoading = ref(false)
+
 function verFoto(producto) {
   fotoProducto.value = producto
   fotoModal.value = true
+}
+
+async function abrirHistorial(item) {
+  itemHistorial.value = { producto_id: item.producto_id, producto_nombre: item.producto?.nombre }
+  movimientos.value = []
+  movimientosLoading.value = true
+  mostrarHistorial.value = true
+  try {
+    const tid = esVistaGlobal.value ? null : tiendaId.value
+    const { data } = await getMovimientos(item.producto_id, tid)
+    movimientos.value = data
+  } catch {
+    movimientos.value = []
+  } finally {
+    movimientosLoading.value = false
+  }
 }
 
 // ── Agregar producto ──────────────────────────────────────────────────────────
@@ -154,16 +178,10 @@ async function crearProducto() {
   }
 }
 
-const POR_PAGINA = 20
-
 const esVistaGlobal   = computed(() => tiendaId.value === 'todas')
 const puedeGestionar  = computed(() =>
   auth.isSupervisor || String(tiendaId.value) === String(auth.usuario?.tienda_default_id)
 )
-
-const paginaVisible = computed(() => {
-  return inventario.value.slice(0, pagina.value * POR_PAGINA)
-})
 
 const sentinel = ref(null)
 let observer = null
@@ -177,32 +195,37 @@ async function cargarTiendas() {
 
 async function cargarInventario(reset = false) {
   if (!tiendaId.value) return
-  loading.value = true
+  if (reset) loading.value = true
   try {
-    const { data } = await getInventario(tiendaId.value, busqueda.value.trim())
-    todosLosItems.value = data
-    inventario.value = data
-    pagina.value = 1
-    tieneMas.value = data.length > POR_PAGINA
+    const page = reset ? 1 : currentPage.value + 1
+    const { data } = await getInventario(tiendaId.value, busqueda.value.trim(), page)
+    if (reset) {
+      inventario.value = data.data
+    } else {
+      inventario.value.push(...data.data)
+    }
+    currentPage.value = data.current_page
+    lastPage.value = data.last_page
+    tieneMas.value = data.current_page < data.last_page
   } catch {
-    todosLosItems.value = []
-    inventario.value = []
+    if (reset) inventario.value = []
   } finally {
     loading.value = false
+    loadingMore.value = false
   }
+  if (tieneMas.value) nextTick(setupObserver)
 }
 
 function loadMore() {
-  if (pagina.value * POR_PAGINA >= inventario.value.length) {
-    tieneMas.value = false
-  }
+  if (loadingMore.value || !tieneMas.value) return
+  loadingMore.value = true
+  cargarInventario(false)
 }
 
 function setupObserver() {
   if (observer) observer.disconnect()
   observer = new IntersectionObserver((entries) => {
-    if (entries[0].isIntersecting && tieneMas.value) {
-      pagina.value++
+    if (entries[0].isIntersecting && tieneMas.value && !loadingMore.value) {
       loadMore()
     }
   }, { rootMargin: '200px' })
@@ -229,7 +252,7 @@ async function guardarPrecio() {
       precio_base: nuevoPrecio.value,
     })
     mostrarGestionar.value = false
-    await cargarInventario()
+    await cargarInventario(true)
   } catch (e) {
     gestionError.value = e.response?.data?.message ?? 'Error al actualizar el precio.'
   } finally {
@@ -252,7 +275,7 @@ async function guardarStock() {
       motivo: stockMotivo.value || undefined,
     })
     mostrarGestionar.value = false
-    await cargarInventario()
+    await cargarInventario(true)
   } catch (e) {
     stockError.value = e.response?.data?.message ?? 'Error al agregar stock.'
   } finally {
@@ -406,8 +429,7 @@ onMounted(async () => {
   await cargarTiendas()
   if (auth.usuario?.tienda_default_id) {
     tiendaId.value = auth.usuario.tienda_default_id
-    await cargarInventario()
-    setupObserver()
+    await cargarInventario(true)
   }
 
   listen('inventario', 'inventario.actualizado', (e) => {
@@ -417,9 +439,23 @@ onMounted(async () => {
       // Limpiar cache de variantes para que se recarguen al expandir
       variantesData.value = {}
       variantesAbiertas.value = {}
-      cargarInventario()
+      cargarInventario(true)
     }
   })
+
+  // Auto-abrir historial desde notificación
+  const queryAbrir = route.query.abrir
+  if (queryAbrir) {
+    const ids = queryAbrir.split(',').map(Number).filter(Boolean)
+    const wait = setInterval(() => {
+      const item = inventario.value.find(i => ids.includes(i.producto_id))
+      if (item) {
+        clearInterval(wait)
+        abrirHistorial(item)
+      }
+    }, 200)
+    setTimeout(() => clearInterval(wait), 10000)
+  }
 })
 </script>
 
@@ -462,6 +498,9 @@ onMounted(async () => {
       />
     </div>
 
+    <!-- Panel de surtidos pendientes (solo vendedor) -->
+    <SurtidosPendientesPanel v-if="!auth.isSupervisor" />
+
     <!-- Sin tienda seleccionada -->
     <EmptyState
       v-if="!tiendaId"
@@ -494,7 +533,7 @@ onMounted(async () => {
     <template v-else>
       <ul class="space-y-2">
         <li
-          v-for="item in paginaVisible"
+          v-for="item in inventario"
           :key="item.id"
           class="bg-white rounded-xl shadow-sm p-4 space-y-2"
         >
@@ -527,14 +566,24 @@ onMounted(async () => {
                 </span>
               </div>
             </div>
-            <button
-              v-if="puedeGestionar"
-              @click="openGestionar(item)"
-              class="text-blue-600 text-xs font-medium flex items-center gap-1 flex-shrink-0"
-            >
-              <PencilIcon class="w-4 h-4" />
-              Gestionar
-            </button>
+            <div class="flex items-center gap-2 flex-shrink-0">
+              <button
+                v-if="!esVistaGlobal"
+                @click="abrirHistorial(item)"
+                class="text-gray-500 text-xs font-medium flex items-center gap-1"
+              >
+                <ArchiveBoxIcon class="w-4 h-4" />
+                Historial
+              </button>
+              <button
+                v-if="puedeGestionar"
+                @click="openGestionar(item)"
+                class="text-blue-600 text-xs font-medium flex items-center gap-1"
+              >
+                <PencilIcon class="w-4 h-4" />
+                Gestionar
+              </button>
+            </div>
           </div>
 
           <!-- Stock -->
@@ -623,8 +672,8 @@ onMounted(async () => {
 
       <!-- Sentinel scroll infinito -->
       <div ref="sentinel" class="py-4 text-center">
-        <div v-if="tieneMas" class="text-sm text-gray-400">Cargando más...</div>
-        <div v-else-if="inventario.length > 0" class="text-xs text-gray-300">
+        <div v-if="loadingMore" class="text-sm text-gray-400">Cargando más...</div>
+        <div v-else-if="!tieneMas && inventario.length > 0" class="text-xs text-gray-300">
           Mostrando {{ inventario.length }} productos
         </div>
       </div>
@@ -888,6 +937,39 @@ onMounted(async () => {
               placeholder="Motivo (opcional)"
             />
             <p v-if="stockError" class="text-xs text-red-600 mt-1">{{ stockError }}</p>
+          </div>
+        </div>
+      </div>
+    </Transition>
+
+    <!-- Modal: Historial de movimientos -->
+    <Transition name="fade">
+      <div v-if="mostrarHistorial" class="fixed inset-0 z-50 flex items-end sm:items-center justify-center" @click.self="mostrarHistorial = false">
+        <div class="absolute inset-0 bg-black/40" />
+        <div class="relative bg-white rounded-t-2xl sm:rounded-2xl w-full sm:max-w-md max-h-[80vh] flex flex-col">
+          <div class="flex items-center justify-between px-5 pt-5 pb-3 border-b border-gray-100 flex-shrink-0">
+            <div>
+              <h3 class="text-lg font-bold text-gray-800">Historial de movimientos</h3>
+              <p class="text-xs text-gray-500 mt-0.5">{{ itemHistorial?.producto_nombre }}</p>
+            </div>
+            <button @click="mostrarHistorial = false" class="text-gray-400 text-2xl leading-none">&times;</button>
+          </div>
+          <div class="overflow-y-auto flex-1 px-5 py-4 space-y-2">
+            <div v-if="movimientosLoading" class="text-sm text-gray-400 text-center py-8">Cargando...</div>
+            <div v-else-if="movimientos.length === 0" class="text-sm text-gray-400 text-center py-8">Sin movimientos registrados</div>
+            <div v-else v-for="m in movimientos" :key="m.id" class="flex items-start gap-3 py-2 border-b border-gray-50 last:border-0">
+              <span
+                class="mt-0.5 text-xs font-bold px-2 py-0.5 rounded-full shrink-0"
+                :class="m.tipo === 'entrada' ? 'bg-green-100 text-green-700' : m.tipo === 'reserva' ? 'bg-amber-100 text-amber-700' : m.tipo === 'salida' ? 'bg-red-100 text-red-700' : 'bg-blue-100 text-blue-700'"
+              >
+                {{ m.tipo === 'entrada' ? 'Entrada' : m.tipo === 'salida' ? 'Salida' : m.tipo === 'reserva' ? 'Reserva' : 'Liberación' }}
+              </span>
+              <div class="flex-1 min-w-0">
+                <p class="text-sm font-medium text-gray-800">{{ m.cantidad }} unidad(es)</p>
+                <p class="text-xs text-gray-500 truncate">{{ m.motivo ?? '—' }}</p>
+                <p class="text-xs text-gray-400">{{ new Date(m.created_at).toLocaleString('es-CO', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) }}</p>
+              </div>
+            </div>
           </div>
         </div>
       </div>

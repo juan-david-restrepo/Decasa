@@ -10,4 +10,6 @@ export const reenviarCotizacion = (id, email = null) =>
   api.post(`/ordenes/${id}/reenviar-cotizacion`, email ? { email } : {})
 export const asignarFechasEntrega = (id, items) =>
   api.patch(`/ordenes/${id}/fechas-entrega`, { items })
+export const editarOrden = (id, data) => api.patch(`/ordenes/${id}`, data)
+export const buscarProductos = (search = '') => api.get('/productos', { params: { search } })
 export const getTiendas = () => api.get('/tiendas')

@@ -19,6 +19,7 @@ class Usuario extends Authenticatable
         'email',
         'password',
         'rol',
+        'facturacion',
         'tienda_default_id',
         'activo',
         'firma_url',
@@ -30,8 +31,9 @@ class Usuario extends Authenticatable
     protected function casts(): array
     {
         return [
-            'password' => 'hashed',
-            'activo'   => 'boolean',
+            'password'    => 'hashed',
+            'activo'      => 'boolean',
+            'facturacion' => 'boolean',
         ];
     }
 

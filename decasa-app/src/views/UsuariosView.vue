@@ -1,5 +1,5 @@
 ﻿<script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import {
   MagnifyingGlassIcon,
@@ -18,7 +18,12 @@ const usuarios = ref([])
 const tiendas = ref([])
 const loading = ref(true)
 const showFilters = ref(false)
+const cargandoMas = ref(false)
+const tieneMas = ref(false)
+const sentinel = ref(null)
+let observer = null
 
+const paginaActual = ref(1)
 const busqueda = ref('')
 const filtros = ref({
   rol: '',
@@ -33,22 +38,53 @@ async function cargarTiendas() {
   } catch {}
 }
 
-async function cargarUsuarios() {
-  loading.value = true
+async function cargarUsuarios(reset = true) {
+  if (reset) {
+    loading.value = true
+    usuarios.value = []
+    paginaActual.value = 1
+  }
   try {
-    const params = {}
+    const params = { page: paginaActual.value }
+    if (!reset) params.page = paginaActual.value + 1
     if (busqueda.value.trim()) params.search = busqueda.value.trim()
     if (filtros.value.rol) params.rol = filtros.value.rol
     if (filtros.value.tienda_id) params.tienda_id = filtros.value.tienda_id
     if (filtros.value.estado) params.estado = filtros.value.estado
 
     const { data } = await getUsuarios(params)
-    usuarios.value = data
+    if (reset) {
+      usuarios.value = data.data
+    } else {
+      usuarios.value.push(...data.data)
+    }
+    paginaActual.value = data.current_page
+    tieneMas.value = data.current_page < data.last_page
   } catch {
-    usuarios.value = []
+    if (reset) usuarios.value = []
   } finally {
     loading.value = false
+    cargandoMas.value = false
+    if (tieneMas.value) nextTick(setupObserver)
   }
+}
+
+function loadMore() {
+  if (cargandoMas.value || !tieneMas.value) return
+  cargandoMas.value = true
+  cargarUsuarios(false)
+}
+
+function setupObserver() {
+  if (observer) observer.disconnect()
+  observer = new IntersectionObserver((entries) => {
+    if (entries[0].isIntersecting && tieneMas.value && !cargandoMas.value) {
+      loadMore()
+    }
+  }, { rootMargin: '200px' })
+  nextTick(() => {
+    if (sentinel.value) observer.observe(sentinel.value)
+  })
 }
 
 function applyFilters() {
@@ -73,6 +109,8 @@ function goToCrear() {
 const rolBadgeCls = (rol) =>
   rol === 'supervisor'
     ? 'bg-blue-100 text-blue-700'
+    : rol === 'conductor'
+    ? 'bg-amber-100 text-amber-700'
     : 'bg-gray-100 text-gray-600'
 
 const estadoBadgeCls = (activo) =>
@@ -86,13 +124,17 @@ onMounted(async () => {
   await cargarTiendas()
   await cargarUsuarios()
 })
+
+onBeforeUnmount(() => {
+  if (observer) observer.disconnect()
+})
 </script>
 
 <template>
   <div class="p-4 max-w-2xl mx-auto space-y-3 pb-8">
     <!-- Header -->
     <div class="flex items-center gap-2">
-      <h2 class="text-lg font-bold text-gray-800 flex-1">Vendedores</h2>
+      <h2 class="text-lg font-bold text-gray-800 flex-1">Trabajadores</h2>
       <button
         @click="showFilters = !showFilters"
         class="text-sm text-blue-600 font-medium px-3 py-1.5 rounded-lg border border-blue-200 hover:bg-blue-50 transition-colors"
@@ -126,6 +168,7 @@ onMounted(async () => {
           <option value="">Todos</option>
           <option value="vendedor">Vendedores</option>
           <option value="supervisor">Supervisores</option>
+          <option value="conductor">Conductores</option>
         </select>
       </div>
       <div>
@@ -170,14 +213,14 @@ onMounted(async () => {
           <div class="flex items-center gap-2 mb-1">
             <p class="font-medium text-gray-800 truncate">{{ u.nombre }}</p>
             <span :class="['inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium', rolBadgeCls(u.rol)]">
-              {{ u.rol === 'supervisor' ? 'Admin' : 'Vendedor' }}
+              {{ u.rol === 'supervisor' ? 'Admin' : u.rol === 'conductor' ? 'Conductor' : 'Vendedor' }}
             </span>
             <span :class="['inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium', estadoBadgeCls(u.activo)]">
               {{ estadoLabel(u.activo) }}
             </span>
           </div>
           <p class="text-xs text-gray-400 truncate">{{ u.email }}</p>
-          <p v-if="u.tienda" class="text-xs text-gray-400 flex items-center gap-1 mt-0.5">
+          <p v-if="u.tienda && u.rol !== 'conductor'" class="text-xs text-gray-400 flex items-center gap-1 mt-0.5">
             <MapPinIcon class="w-3.5 h-3.5" />
             {{ u.tienda.nombre }}
           </p>
@@ -185,5 +228,13 @@ onMounted(async () => {
         <ChevronRightIcon class="w-5 h-5 text-gray-300 flex-shrink-0" />
       </li>
     </ul>
+
+    <!-- Sentinel infinite scroll -->
+    <div ref="sentinel" class="py-4 text-center">
+      <div v-if="cargandoMas" class="text-sm text-gray-400">Cargando más...</div>
+      <div v-else-if="!tieneMas && usuarios.length > 0" class="text-xs text-gray-300">
+        Mostrando {{ usuarios.length }} trabajadores
+      </div>
+    </div>
   </div>
 </template>

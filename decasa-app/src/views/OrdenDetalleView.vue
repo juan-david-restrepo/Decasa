@@ -4,11 +4,13 @@ import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { useToast } from '@/composables/useToast'
 import { getOrden, updateEstado, descargarPdfOrden, reenviarCotizacion, asignarFechasEntrega } from '@/api/ordenes'
+import { despachoPorOrden } from '@/api/despacho'
 import BadgeEstado from '@/components/common/BadgeEstado.vue'
 import MoneyDisplay from '@/components/common/MoneyDisplay.vue'
 import RegistroPagoModal from '@/components/ordenes/RegistroPagoModal.vue'
+import EditarOrdenModal from '@/components/ordenes/EditarOrdenModal.vue'
 import { SparklesIcon, XMarkIcon } from '@heroicons/vue/24/solid'
-import { DocumentIcon, EnvelopeIcon, ChatBubbleLeftEllipsisIcon, ArrowDownTrayIcon, CalendarIcon, BuildingOffice2Icon } from '@heroicons/vue/24/outline'
+import { DocumentIcon, EnvelopeIcon, ChatBubbleLeftEllipsisIcon, ArrowDownTrayIcon, CalendarIcon, BuildingOffice2Icon, TruckIcon, PencilSquareIcon, ClockIcon } from '@heroicons/vue/24/outline'
 
 const route = useRoute()
 const router = useRouter()
@@ -20,8 +22,9 @@ const loading = ref(true)
 const verFactura = ref(false)
 const bocetoModal = ref('')
 const error = ref('')
-const showPagoModal = ref(false)
-const changingEstado = ref(false)
+const showPagoModal   = ref(false)
+const showEditarModal = ref(false)
+const changingEstado  = ref(false)
 const estadoError = ref('')
 const enviandoEmail = ref(false)
 const emailManual = ref('')
@@ -30,6 +33,20 @@ const mostrarEmailManual = ref(false)
 const fechasEdicion = ref({})
 const guardandoFechas = ref(false)
 
+const despachoEntrega = ref(null)
+const cargandoDespacho = ref(false)
+
+const pruebaEntregaVisible = computed(() =>
+  orden.value?.estado === 'entregado' && despachoEntrega.value
+)
+
+const puedeEditar = computed(() => {
+  if (!orden.value) return false
+  if (['entregado', 'cancelado', 'listo_entrega', 'en_despacho'].includes(orden.value.estado)) return false
+  if (auth.usuario?.rol === 'vendedor' && orden.value.vendedor_id !== auth.usuario.id) return false
+  return true
+})
+
 const todasFechasAsignadas = computed(() =>
   (orden.value?.items?.length ?? 0) > 0 && (orden.value?.items?.every(i => i.fecha_entrega_prom) ?? false)
 )
@@ -37,7 +54,8 @@ const todasFechasAsignadas = computed(() =>
 const transicionesValidas = {
   pendiente_anticipo: ['en_produccion', 'listo_entrega', 'cancelado'],
   en_produccion: ['listo_entrega', 'cancelado'],
-  listo_entrega: ['entregado', 'cancelado'],
+  listo_entrega: [],
+  en_despacho: [],
   entregado: [],
   cancelado: [],
 }
@@ -60,7 +78,7 @@ const porcentajePagado = computed(() => {
 const puedeCambiarEstado = computed(() => {
   if (!orden.value) return false
   if (!auth.isSupervisor) return false
-  if (['entregado', 'cancelado'].includes(orden.value.estado)) return false
+  if (['entregado', 'cancelado', 'listo_entrega', 'en_despacho'].includes(orden.value.estado)) return false
   if (tienePersonalizados.value) return false
   return true
 })
@@ -102,10 +120,27 @@ async function cargarOrden() {
         : ''
     }
     fechasEdicion.value = edicion
+
+    // Cargar datos de despacho si está entregado
+    if (data.estado === 'entregado') {
+      cargarDespachoEntrega(data.id)
+    }
   } catch (e) {
     error.value = e.response?.data?.message ?? 'No se pudo cargar la orden.'
   } finally {
     loading.value = false
+  }
+}
+
+async function cargarDespachoEntrega(ordenId) {
+  try {
+    cargandoDespacho.value = true
+    const { data } = await despachoPorOrden(ordenId)
+    despachoEntrega.value = data
+  } catch {
+    despachoEntrega.value = null
+  } finally {
+    cargandoDespacho.value = false
   }
 }
 
@@ -124,6 +159,26 @@ async function cambiarEstado() {
 
 function onPagoRegistrado() {
   cargarOrden()
+}
+
+function onOrdenEditada(ordenActualizada) {
+  orden.value = ordenActualizada
+}
+
+function formatCambioVal(val) {
+  if (val === null || val === undefined || val === '') return '—'
+  if (typeof val === 'object') {
+    const parts = []
+    if (val.marca)       parts.push(val.marca)
+    if (val.tela)        parts.push(val.tela)
+    if (val.color)       parts.push(val.color)
+    if (val.medidas)     parts.push(val.medidas)
+    if (val.acabado)     parts.push(val.acabado)
+    if (val.descripcion) parts.push(val.descripcion)
+    return parts.length ? parts.join(' · ') : JSON.stringify(val)
+  }
+  if (typeof val === 'number') return new Intl.NumberFormat('es-CO').format(val)
+  return String(val)
 }
 
 async function descargarPdf() {
@@ -261,6 +316,15 @@ onMounted(cargarOrden)
         Orden #{{ orden?.id ?? '...' }}
       </h2>
       <button
+        v-if="orden && puedeEditar"
+        @click="showEditarModal = true"
+        class="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-amber-700 bg-amber-50 rounded-lg hover:bg-amber-100 transition-colors"
+        title="Editar orden"
+      >
+        <PencilSquareIcon class="w-4 h-4" />
+        Editar
+      </button>
+      <button
         v-if="orden"
         @click="descargarPdf"
         class="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-blue-600 bg-blue-50 rounded-lg hover:bg-blue-100 transition-colors"
@@ -363,9 +427,15 @@ onMounted(cargarOrden)
               <p v-if="item.es_personalizado" class="text-xs text-purple-600 mt-1 flex items-center gap-1">
                 <SparklesIcon class="w-3.5 h-3.5" /> Personalizado
               </p>
-              <p v-if="item.es_personalizado && item.specs_personalizacion?.descripcion" class="text-xs text-gray-600 mt-1 bg-purple-50 rounded-lg px-2 py-1.5 whitespace-pre-wrap">
-                {{ item.specs_personalizacion.descripcion }}
-              </p>
+              <div v-if="item.es_personalizado && item.specs_personalizacion" class="mt-1 bg-purple-50 rounded-lg px-2 py-1.5 text-xs text-gray-600 space-y-0.5">
+                <p v-if="item.specs_personalizacion.marca || item.specs_personalizacion.tela || item.specs_personalizacion.color">
+                  <span v-if="item.specs_personalizacion.marca">{{ item.specs_personalizacion.marca }}</span><span v-if="item.specs_personalizacion.tela"> · {{ item.specs_personalizacion.tela }}</span><span v-if="item.specs_personalizacion.color"> · {{ item.specs_personalizacion.color }}</span>
+                </p>
+                <p v-if="item.specs_personalizacion.medidas || item.specs_personalizacion.acabado">
+                  <span v-if="item.specs_personalizacion.medidas">{{ item.specs_personalizacion.medidas }}</span><span v-if="item.specs_personalizacion.acabado"> · {{ item.specs_personalizacion.acabado }}</span>
+                </p>
+                <p v-if="item.specs_personalizacion.descripcion" class="whitespace-pre-wrap">{{ item.specs_personalizacion.descripcion }}</p>
+              </div>
               <div v-if="item.boceto_url" class="mt-2">
                 <div class="flex items-center justify-between mb-1">
                   <p class="text-xs text-gray-400">Boceto</p>
@@ -395,6 +465,43 @@ onMounted(cargarOrden)
             </div>
           </div>
         </div>
+      </div>
+
+      <!-- Pruebas de Entrega (despacho) -->
+      <div v-if="pruebaEntregaVisible" class="bg-white rounded-xl shadow-sm p-4 space-y-3">
+        <p class="text-xs font-semibold text-gray-500 uppercase">Pruebas de Entrega</p>
+
+        <div v-if="cargandoDespacho" class="text-sm text-gray-400">Cargando...</div>
+
+        <template v-else-if="despachoEntrega">
+          <div class="grid grid-cols-2 gap-3">
+            <div v-if="despachoEntrega.foto_producto">
+              <p class="text-xs text-gray-500 mb-1">Producto entregado</p>
+              <img
+                :src="despachoEntrega.foto_producto"
+                class="w-full h-32 object-cover rounded-lg border border-gray-200 cursor-pointer"
+                @click="verFactura = despachoEntrega.foto_producto"
+              />
+            </div>
+            <div v-if="despachoEntrega.foto_pago">
+              <p class="text-xs text-gray-500 mb-1">Comprobante de pago</p>
+              <img
+                :src="despachoEntrega.foto_pago"
+                class="w-full h-32 object-cover rounded-lg border border-gray-200 cursor-pointer"
+                @click="verFactura = despachoEntrega.foto_pago"
+              />
+            </div>
+          </div>
+
+          <div class="flex items-center justify-between text-sm pt-2 border-t border-gray-100">
+            <span class="text-gray-500">Conductor</span>
+            <span class="font-medium text-gray-800">{{ despachoEntrega.despacho?.conductor?.nombre }}</span>
+          </div>
+          <div v-if="despachoEntrega.entregado_at" class="flex items-center justify-between text-sm">
+            <span class="text-gray-500">Entregado el</span>
+            <span class="font-medium text-gray-800">{{ formatDateTime(despachoEntrega.entregado_at) }}</span>
+          </div>
+        </template>
       </div>
 
       <!-- Historial de pagos -->
@@ -446,6 +553,32 @@ onMounted(cargarOrden)
         >
           {{ guardandoFechas ? 'Guardando...' : 'Guardar fechas' }}
         </button>
+      </div>
+
+      <!-- Historial de ediciones -->
+      <div v-if="orden.ediciones?.length" class="bg-white rounded-xl shadow-sm p-4 space-y-3">
+        <p class="text-xs font-semibold text-gray-500 uppercase flex items-center gap-1.5">
+          <ClockIcon class="w-3.5 h-3.5" />
+          Historial de ediciones ({{ orden.ediciones.length }})
+        </p>
+        <div
+          v-for="edicion in orden.ediciones"
+          :key="edicion.id"
+          class="border-b border-gray-100 last:border-0 pb-3 last:pb-0"
+        >
+          <div class="flex justify-between items-center mb-1.5">
+            <span class="text-xs font-semibold text-gray-700">{{ edicion.usuario?.nombre }}</span>
+            <span class="text-[11px] text-gray-400">{{ formatDateTime(edicion.created_at) }}</span>
+          </div>
+          <ul class="space-y-1">
+            <li v-for="cambio in edicion.cambios" :key="cambio.campo" class="text-xs text-gray-600 leading-snug">
+              <span class="font-medium">{{ cambio.label }}:</span>
+              <span class="text-red-500 line-through ml-1">{{ formatCambioVal(cambio.antes) }}</span>
+              <span class="mx-1 text-gray-400">→</span>
+              <span class="text-green-600">{{ formatCambioVal(cambio.despues) }}</span>
+            </li>
+          </ul>
+        </div>
       </div>
 
       <!-- Compartir cotización -->
@@ -524,6 +657,29 @@ onMounted(cargarOrden)
         </template>
       </div>
 
+      <!-- Aviso: orden en despacho -->
+      <div
+        v-if="orden.estado === 'listo_entrega'"
+        class="bg-purple-50 border border-purple-200 rounded-xl px-4 py-3 flex items-start gap-3"
+      >
+        <TruckIcon class="w-5 h-5 mt-0.5 text-purple-600 flex-shrink-0" />
+        <div>
+          <p class="text-sm font-semibold text-purple-800">Orden en cola de despacho</p>
+          <p class="text-xs text-purple-600 mt-0.5">Esta orden está lista para entregar. El supervisor debe asignarla a un conductor desde el módulo de Despacho.</p>
+        </div>
+      </div>
+
+      <div
+        v-if="orden.estado === 'en_despacho'"
+        class="bg-purple-50 border border-purple-200 rounded-xl px-4 py-3 flex items-start gap-3"
+      >
+        <TruckIcon class="w-5 h-5 mt-0.5 text-purple-600 flex-shrink-0" />
+        <div>
+          <p class="text-sm font-semibold text-purple-800">Orden en ruta de despacho</p>
+          <p class="text-xs text-purple-600 mt-0.5">Esta orden fue asignada a un conductor para entrega. El estado se actualizará cuando el conductor la marque como entregada.</p>
+        </div>
+      </div>
+
       <!-- Acciones -->
       <div v-if="puedeCambiarEstado || puedeRegistrarPago || (tienePersonalizados && !['entregado','cancelado'].includes(orden.estado))" class="space-y-3">
         <p class="text-xs font-semibold text-gray-500 uppercase">Acciones</p>
@@ -582,6 +738,15 @@ onMounted(cargarOrden)
       @pago-registrado="onPagoRegistrado"
     />
 
+    <!-- Modal de edición -->
+    <EditarOrdenModal
+      v-if="orden"
+      :show="showEditarModal"
+      :orden="orden"
+      @close="showEditarModal = false"
+      @guardado="onOrdenEditada"
+    />
+
     <!-- Lightbox boceto -->
     <Transition name="fade">
       <div
@@ -628,8 +793,8 @@ onMounted(cargarOrden)
           </button>
           <div class="bg-white rounded-2xl overflow-hidden shadow-2xl">
             <img
-              :src="orden.factura_foto_url"
-              alt="Factura"
+              :src="verFactura"
+              alt="Foto"
               class="w-full object-contain max-h-96"
             />
           </div>

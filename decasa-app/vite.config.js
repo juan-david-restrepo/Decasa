@@ -15,6 +15,10 @@ export default defineConfig({
         target: 'http://decasa-api.test',
         changeOrigin: true,
       },
+      '/storage': {
+        target: 'http://decasa-api.test',
+        changeOrigin: true,
+      },
     },
   },
 })

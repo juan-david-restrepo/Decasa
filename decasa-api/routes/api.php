@@ -13,6 +13,8 @@ use App\Http\Controllers\TiendaController;
 use App\Http\Controllers\StatsController;
 use App\Http\Controllers\UploadController;
 use App\Http\Controllers\UsuarioController;
+use App\Http\Controllers\DespachoController;
+use App\Http\Controllers\SurtidoController;
 use App\Http\Controllers\VarianteController;
 use Illuminate\Support\Facades\Route;
 
@@ -47,6 +49,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/ordenes',              [OrdenController::class, 'index']);
     Route::post('/ordenes',             [OrdenController::class, 'store']);
     Route::get('/ordenes/{id}',                         [OrdenController::class, 'show']);
+    Route::patch('/ordenes/{id}',                       [OrdenController::class, 'update']);
     Route::patch('/ordenes/{id}/estado',                [OrdenController::class, 'updateEstado']);
     Route::get('/ordenes/{id}/pdf',                     [OrdenController::class, 'pdf']);
     Route::post('/ordenes/{id}/reenviar-cotizacion',    [OrdenController::class, 'reenviarCotizacion']);
@@ -60,9 +63,22 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/upload/foto', [UploadController::class, 'foto']);
 
     // Inventario
-    Route::get('/inventario',                    [InventarioController::class, 'index']);
-    Route::post('/inventario/entrada',           [InventarioController::class, 'entrada']);
-    Route::post('/inventario/variantes/entrada', [VarianteController::class, 'entrada']);
+    Route::get('/inventario',                              [InventarioController::class, 'index']);
+    Route::get('/inventario/{productoId}/movimientos',     [InventarioController::class, 'movimientos'])->whereNumber('productoId');
+    Route::post('/inventario/entrada',                     [InventarioController::class, 'entrada']);
+    Route::post('/inventario/variantes/entrada',           [VarianteController::class, 'entrada']);
+
+    // Surtir — accesible para vendedor (pendientes, aceptar, rechazar) y supervisor (todo)
+    Route::get('/inventario/surtidos/pendientes',          [SurtidoController::class, 'pendientes']);
+    Route::patch('/inventario/surtido-tiendas/{id}/aceptar', [SurtidoController::class, 'aceptar']);
+    Route::patch('/inventario/surtido-tiendas/{id}/rechazar', [SurtidoController::class, 'rechazar']);
+
+    Route::middleware('role:supervisor')->group(function () {
+        Route::post('/inventario/surtir',                          [SurtidoController::class, 'crear']);
+        Route::get('/inventario/surtidos',                         [SurtidoController::class, 'index']);
+        Route::get('/inventario/surtidos/{id}',                    [SurtidoController::class, 'show'])->whereNumber('id');
+        Route::get('/inventario/vendedores-tienda/{tiendaId}',     [SurtidoController::class, 'vendedoresTienda'])->whereNumber('tiendaId');
+    });
 
     // Variantes de producto (tela/color)
     Route::get('/productos/{id}/variantes',  [VarianteController::class, 'index']);
@@ -96,6 +112,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/productos',        [StatsController::class, 'productos']);
         Route::get('/cartera',          [StatsController::class, 'cartera']);
         Route::get('/vendedores/me',    [StatsController::class, 'statsMe']);
+        Route::get('/conductor',        [StatsController::class, 'statsConductor']);
 
         // Solo supervisor
         Route::middleware('role:supervisor')->group(function () {
@@ -116,5 +133,27 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::get('/productos-top',  [ReporteController::class, 'productosTop']);
             Route::get('/pendientes',     [ReporteController::class, 'pendientes']);
         });
+    });
+
+    // ── Despacho ─────────────────────────────────────────────────────────────
+    Route::prefix('despacho')->group(function () {
+        // Público autenticado (supervisor, vendedor, conductor)
+        Route::get('/por-orden/{ordenId}', [DespachoController::class, 'porOrden']);
+
+        // Supervisor
+        Route::middleware('role:supervisor')->group(function () {
+            Route::get('/cola',          [DespachoController::class, 'cola']);
+            Route::get('/asignados',     [DespachoController::class, 'asignados']);
+            Route::post('/asignar',      [DespachoController::class, 'asignar']);
+            Route::get('/conductores',   [DespachoController::class, 'conductores']);
+            Route::get('/historial',     [DespachoController::class, 'historial']);
+            Route::get('/{id}',          [DespachoController::class, 'show'])->whereNumber('id');
+        });
+
+        // Conductor (autenticado)
+        Route::get('/mis-entregas',                          [DespachoController::class, 'misEntregas']);
+        Route::get('/mis-entregas/{despachoItemId}',         [DespachoController::class, 'showEntrega']);
+        Route::post('/mis-entregas/{despachoItemId}/pago',   [DespachoController::class, 'registrarPago']);
+        Route::patch('/mis-entregas/{despachoItemId}/entregar', [DespachoController::class, 'entregar']);
     });
 });

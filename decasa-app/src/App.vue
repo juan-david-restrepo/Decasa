@@ -3,6 +3,9 @@ import { computed, ref, watch, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { useNotificacionesStore } from '@/stores/notificaciones'
+import { useDespachoStore } from '@/stores/despacho'
+import { useSurtidosStore } from '@/stores/surtidos'
+import { useSurtidosSocket } from '@/composables/useSurtidosSocket'
 import ScrollToTop from '@/components/common/ScrollToTop.vue'
 import ToastContainer from '@/components/common/ToastContainer.vue'
 import {
@@ -28,12 +31,17 @@ import {
   XCircleIcon,
   CalendarIcon,
   CalendarDaysIcon,
+  TruckIcon,
+  ArchiveBoxArrowDownIcon,
 } from '@heroicons/vue/24/outline'
 
 const route  = useRoute()
 const router = useRouter()
 const auth   = useAuthStore()
 const notif  = useNotificacionesStore()
+const despacho = useDespachoStore()
+const surtidos = useSurtidosStore()
+const { conectar: conectarSurtidos } = useSurtidosSocket()
 
 const showNav    = computed(() => auth.isAuthenticated && route.name !== 'login')
 const abrirNotif = ref(false)
@@ -44,14 +52,22 @@ onMounted(() => { auth.fetchMe() })
 watch(() => auth.isAuthenticated, (isAuth) => {
   if (!isAuth) return
   notif.cargar()
-  if (!window.Echo) return
-  const canal = auth.isSupervisor
-    ? 'notificaciones'
-    : `notificaciones.${auth.usuario?.id}`
-  window.Echo.channel(canal)
+  if (['supervisor', 'conductor'].includes(auth.usuario?.rol)) {
+    despacho.refrescar()
+  }
+  if (auth.usuario?.rol === 'vendedor') {
+    surtidos.cargarPendientes()
+  }
+}, { immediate: true })
+
+// WebSockets — espera a que usuario esté cargado (fetchMe) para tener id y rol
+watch(() => auth.usuario?.id, (id) => {
+  if (!id || !window.Echo) return
+  window.Echo.channel(`notificaciones.${id}`)
     .stopListening('.nueva.notificacion')
     .listen('.nueva.notificacion', n => { notif.agregarNueva(n) })
-}, { immediate: true })
+  conectarSurtidos()
+})
 
 // Cerrar menú "Más" al cambiar de ruta
 watch(() => route.name, () => { abrirMas.value = false })
@@ -62,24 +78,38 @@ const navItems = computed(() => {
       { name: 'dashboard',  label: 'Inicio',      icon: HomeIcon },
       { name: 'ordenes',    label: 'Órdenes',     icon: ClipboardDocumentListIcon },
       { name: 'produccion', label: 'Producción',  icon: WrenchScrewdriverIcon },
+      { name: 'despacho',   label: 'Despacho',    icon: TruckIcon, badge: despacho.ordenesPendientes },
       { name: 'clientes',   label: 'Clientes',    icon: UserGroupIcon },
       { name: 'inventario', label: 'Inventario',  icon: ArchiveBoxIcon },
-      { name: 'usuarios',   label: 'Vendedores',  icon: UsersIcon },
+      { name: 'surtir',     label: 'Surtir',      icon: ArchiveBoxArrowDownIcon },
+      { name: 'usuarios',   label: 'Trabajadores', icon: UsersIcon },
       { name: 'reportes',   label: 'Reportes',    icon: ChartBarIcon },
+    ]
+  }
+  if (auth.usuario?.rol === 'conductor') {
+    return [
+      { name: 'mis-entregas',        label: 'Entregas',  icon: TruckIcon, badge: despacho.ordenesPendientes },
+      { name: 'mis-stats-conductor', label: 'Estadíst.', icon: PresentationChartLineIcon },
     ]
   }
   return [
     { name: 'dashboard',  label: 'Inicio',     icon: HomeIcon },
     { name: 'ordenes',    label: 'Órdenes',    icon: ClipboardDocumentListIcon },
     { name: 'clientes',   label: 'Clientes',   icon: UserGroupIcon },
-    { name: 'inventario', label: 'Inventario', icon: ArchiveBoxIcon },
+    { name: 'inventario', label: 'Inventario', icon: ArchiveBoxIcon, badge: surtidos.pendientesCount },
     { name: 'mis-stats',  label: 'Estadíst.',  icon: PresentationChartLineIcon },
   ]
 })
 
 // Para supervisor: primeros 4 siempre visibles, el resto en "Más"
-const navPrimarios   = computed(() => auth.isSupervisor ? navItems.value.slice(0, 4) : navItems.value)
-const navSecundarios = computed(() => auth.isSupervisor ? navItems.value.slice(4)    : [])
+const navPrimarios   = computed(() => {
+  const items = navItems.value
+  return auth.usuario?.rol === 'conductor' ? items : (auth.isSupervisor ? items.slice(0, 4) : items)
+})
+const navSecundarios = computed(() => {
+  if (auth.usuario?.rol === 'conductor') return []
+  return auth.isSupervisor ? navItems.value.slice(4) : []
+})
 const masActivo      = computed(() => navSecundarios.value.some(i => i.name === route.name))
 
 function irA(name) {
@@ -97,22 +127,33 @@ async function abrirNotificacion(n) {
   abrirNotif.value = false
   const datos = n.datos ?? {}
   if (datos.orden_id) {
-    router.push({ name: 'orden-detalle', params: { id: datos.orden_id } })
+    if (n.tipo === 'venta_otra_tienda') {
+      const ids = datos.productos
+      router.push({ name: 'inventario', query: ids?.length ? { abrir: ids.join(',') } : {} })
+    } else {
+      router.push({ name: 'orden-detalle', params: { id: datos.orden_id } })
+    }
+  } else if (datos.surtido_id) {
+    router.push({ name: auth.isSupervisor ? 'surtir' : 'inventario' })
   }
 }
 
 function tipoIcono(tipo) {
   const icons = {
-    venta_nueva:       ShoppingCartIcon,
-    venta_otra_tienda: BuildingStorefrontIcon,
-    en_produccion:     WrenchIcon,
-    entregado:         CheckCircleIcon,
-    retrasado:         ExclamationTriangleIcon,
-    por_vencer:        ClockIcon,
-    entrega_hoy:       CubeIcon,
-    cancelado:         XCircleIcon,
-    asignar_fecha:     CalendarIcon,
-    fecha_asignada:    CalendarDaysIcon,
+    venta_nueva:        ShoppingCartIcon,
+    venta_otra_tienda:  BuildingStorefrontIcon,
+    en_produccion:      WrenchIcon,
+    entregado:          CheckCircleIcon,
+    retrasado:          ExclamationTriangleIcon,
+    por_vencer:         ClockIcon,
+    entrega_hoy:        CubeIcon,
+    cancelado:          XCircleIcon,
+    asignar_fecha:      CalendarIcon,
+    fecha_asignada:     CalendarDaysIcon,
+    surtido_enviado:    ArchiveBoxArrowDownIcon,
+    surtido_aceptado:   CheckCircleIcon,
+    surtido_rechazado:  XCircleIcon,
+    facturar:           ClipboardDocumentListIcon,
   }
   return icons[tipo] ?? BellIcon
 }
@@ -237,8 +278,16 @@ function formatFecha(iso) {
               route.name === item.name ? 'text-blue-600 font-semibold' : 'text-gray-500',
             ]"
           >
+          <div class="relative">
             <component :is="item.icon" class="w-6 h-6" />
-            {{ item.label }}
+            <span
+              v-if="item.badge > 0"
+              class="absolute -top-1.5 -right-1.5 bg-red-500 text-white text-[10px] font-bold rounded-full min-w-[16px] h-4 flex items-center justify-center px-0.5"
+            >
+              {{ item.badge > 9 ? '9+' : item.badge }}
+            </span>
+          </div>
+          {{ item.label }}
           </button>
         </div>
       </Transition>
@@ -255,7 +304,15 @@ function formatFecha(iso) {
             route.name === item.name ? 'text-blue-600 font-semibold' : 'text-gray-500',
           ]"
         >
-          <component :is="item.icon" class="w-6 h-6" />
+          <div class="relative">
+            <component :is="item.icon" class="w-6 h-6" />
+            <span
+              v-if="item.badge > 0"
+              class="absolute -top-1.5 -right-1.5 bg-red-500 text-white text-[10px] font-bold rounded-full min-w-[16px] h-4 flex items-center justify-center px-0.5"
+            >
+              {{ item.badge > 9 ? '9+' : item.badge }}
+            </span>
+          </div>
           {{ item.label }}
         </button>
 
@@ -268,7 +325,9 @@ function formatFecha(iso) {
             masActivo || abrirMas ? 'text-blue-600 font-semibold' : 'text-gray-500',
           ]"
         >
-          <EllipsisHorizontalIcon class="w-6 h-6" />
+          <div class="relative">
+            <EllipsisHorizontalIcon class="w-6 h-6" />
+          </div>
           Más
         </button>
       </div>

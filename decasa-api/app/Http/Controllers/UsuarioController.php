@@ -25,19 +25,18 @@ class UsuarioController extends Controller
             });
         }
 
-        $usuarios = $query->orderBy('nombre')->get()->map(function ($u) {
+        return response()->json($query->orderBy('nombre')->paginate(20)->through(function ($u) {
             return [
                 'id'                => $u->id,
                 'nombre'            => $u->nombre,
                 'email'             => $u->email,
                 'rol'               => $u->rol,
+                'facturacion'       => $u->facturacion,
                 'tienda_default_id' => $u->tienda_default_id,
                 'tienda_default'    => $u->tiendaDefault,
                 'activo'            => $u->activo,
             ];
-        });
-
-        return response()->json($usuarios);
+        }));
     }
 
     public function show($id)
@@ -49,6 +48,7 @@ class UsuarioController extends Controller
             'nombre'            => $usuario->nombre,
             'email'             => $usuario->email,
             'rol'               => $usuario->rol,
+            'facturacion'       => $usuario->facturacion,
             'tienda_default_id' => $usuario->tienda_default_id,
             'tienda_default'    => $usuario->tiendaDefault,
             'activo'            => $usuario->activo,
@@ -62,8 +62,13 @@ class UsuarioController extends Controller
             'nombre'            => 'required|string|max:100',
             'email'             => 'required|email|unique:usuarios,email',
             'password'          => 'required|string|min:8|confirmed',
-            'rol'               => ['required', Rule::in(['vendedor', 'supervisor'])],
-            'tienda_default_id' => 'required|exists:tiendas,id',
+            'rol'               => ['required', Rule::in(['vendedor', 'supervisor', 'conductor'])],
+            'facturacion'       => 'boolean',
+            'tienda_default_id' => [
+                Rule::requiredIf(fn () => $request->rol !== 'conductor'),
+                'nullable',
+                'exists:tiendas,id',
+            ],
         ], [
             'nombre.required'            => 'El nombre es obligatorio.',
             'nombre.max'                 => 'El nombre no puede tener más de 100 caracteres.',
@@ -74,7 +79,7 @@ class UsuarioController extends Controller
             'password.min'               => 'La contraseña debe tener al menos 8 caracteres.',
             'password.confirmed'         => 'Las contraseñas no coinciden.',
             'rol.required'               => 'El rol es obligatorio.',
-            'rol.in'                     => 'El rol debe ser vendedor o supervisor.',
+            'rol.in'                     => 'El rol debe ser vendedor, supervisor o conductor.',
             'tienda_default_id.required' => 'La tienda predeterminada es obligatoria.',
             'tienda_default_id.exists'   => 'La tienda seleccionada no existe.',
         ]);
@@ -84,7 +89,8 @@ class UsuarioController extends Controller
             'email'             => $data['email'],
             'password'          => Hash::make($data['password']),
             'rol'               => $data['rol'],
-            'tienda_default_id' => $data['tienda_default_id'],
+            'facturacion'       => $data['facturacion'] ?? false,
+            'tienda_default_id' => $data['tienda_default_id'] ?? null,
             'activo'            => true,
         ]);
 
@@ -93,6 +99,7 @@ class UsuarioController extends Controller
             'nombre'            => $usuario->nombre,
             'email'             => $usuario->email,
             'rol'               => $usuario->rol,
+            'facturacion'       => $usuario->facturacion,
             'tienda_default_id' => $usuario->tienda_default_id,
             'activo'            => $usuario->activo,
         ], 201);
@@ -105,13 +112,14 @@ class UsuarioController extends Controller
         $data = $request->validate([
             'nombre'            => 'sometimes|string|max:100',
             'email'             => ['sometimes', 'email', Rule::unique('usuarios', 'email')->ignore($usuario->id)],
-            'rol'               => ['sometimes', Rule::in(['vendedor', 'supervisor'])],
-            'tienda_default_id' => 'sometimes|exists:tiendas,id',
+            'rol'               => ['sometimes', Rule::in(['vendedor', 'supervisor', 'conductor'])],
+            'facturacion'       => 'nullable|boolean',
+            'tienda_default_id' => 'sometimes|nullable|exists:tiendas,id',
         ], [
             'nombre.max'               => 'El nombre no puede tener más de 100 caracteres.',
             'email.email'              => 'El email debe ser una dirección válida.',
             'email.unique'             => 'Este email ya está registrado.',
-            'rol.in'                   => 'El rol debe ser vendedor o supervisor.',
+            'rol.in'                   => 'El rol debe ser vendedor, supervisor o conductor.',
             'tienda_default_id.exists' => 'La tienda seleccionada no existe.',
         ]);
 
@@ -123,6 +131,7 @@ class UsuarioController extends Controller
             'nombre'            => $usuario->nombre,
             'email'             => $usuario->email,
             'rol'               => $usuario->rol,
+            'facturacion'       => $usuario->facturacion,
             'tienda_default_id' => $usuario->tienda_default_id,
             'tienda_default'    => $usuario->tiendaDefault,
             'activo'            => $usuario->activo,

@@ -65,4 +65,14 @@ class Orden extends Model
     {
         return (float) $this->valor_total - $this->totalPagado();
     }
+
+    public function despachoItem()
+    {
+        return $this->hasOne(DespachoItem::class, 'orden_id');
+    }
+
+    public function ediciones()
+    {
+        return $this->hasMany(OrdenEdicion::class, 'orden_id')->orderByDesc('created_at');
+    }
 }

@@ -125,11 +125,9 @@ async function cargar() {
   loading.value = true
   try {
     const p = params()
-    const [sRes, tRes] = await Promise.all([
-      getStatsMe(p),
-      getTendencia(p),
-    ])
-    stats.value     = sRes.data
+    const sRes = await getStatsMe(p)
+    stats.value = sRes.data
+    const tRes = await getTendencia({ ...p, vendedor_id: stats.value.vendedor?.id })
     tendencia.value = tRes.data
   } finally {
     loading.value = false

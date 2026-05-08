@@ -16,6 +16,7 @@ const form = ref({
   password: '',
   password_confirmation: '',
   rol: 'vendedor',
+  facturacion: false,
   tienda_default_id: '',
 })
 
@@ -41,7 +42,7 @@ function validar() {
   if (!form.value.password) errores.value.password = 'La contraseña es obligatoria'
   else if (form.value.password.length < 8) errores.value.password = 'Mínimo 8 caracteres'
   if (form.value.password !== form.value.password_confirmation) errores.value.password_confirmation = 'Las contraseñas no coinciden'
-  if (!form.value.tienda_default_id) errores.value.tienda_default_id = 'Selecciona una tienda'
+  if (form.value.rol !== 'conductor' && !form.value.tienda_default_id) errores.value.tienda_default_id = 'Selecciona una tienda'
   return Object.keys(errores.value).length === 0
 }
 
@@ -57,6 +58,7 @@ async function submit() {
       password: form.value.password,
       password_confirmation: form.value.password_confirmation,
       rol: form.value.rol,
+      facturacion: form.value.facturacion,
       tienda_default_id: form.value.tienda_default_id,
     })
     router.push({ name: 'usuarios' })
@@ -143,11 +145,26 @@ async function submit() {
         >
           <option value="vendedor">Vendedor</option>
           <option value="supervisor">Supervisor</option>
+          <option value="conductor">Conductor</option>
         </select>
       </div>
 
+      <!-- Facturación (solo vendedores) -->
+      <div v-if="form.rol === 'vendedor'" class="flex items-start gap-3 py-2">
+        <input
+          id="facturacion"
+          type="checkbox"
+          v-model="form.facturacion"
+          class="mt-0.5 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+        />
+        <div>
+          <label for="facturacion" class="text-sm font-medium text-gray-700 cursor-pointer">Facturación</label>
+          <p class="text-xs text-gray-500 mt-0.5">Podrá ver órdenes entregadas de toda la tienda para facturación externa.</p>
+        </div>
+      </div>
+
       <!-- Tienda -->
-      <div>
+      <div v-if="form.rol !== 'conductor'">
         <label class="block text-sm font-medium text-gray-700 mb-1">Tienda predeterminada *</label>
         <select
           v-model="form.tienda_default_id"

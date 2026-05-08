@@ -1,11 +1,13 @@
 <script setup>
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 import { useAuthStore } from '@/stores/auth'
 import api from '@/api'
 import FirmaCanvas from '@/components/FirmaCanvas.vue'
 import { CheckCircleIcon } from '@heroicons/vue/24/solid'
 
 const auth    = useAuthStore()
+const esConductor = computed(() => auth.usuario?.rol === 'conductor')
+
 const firmaBlob    = ref(null)
 const cambiandoFirma = ref(!auth.usuario?.firma_url)
 const guardando    = ref(false)
@@ -71,8 +73,8 @@ function cancelarCambio() {
       </div>
     </div>
 
-    <!-- Firma guardada -->
-    <div class="bg-white rounded-xl shadow-sm p-4 space-y-3">
+    <!-- Firma guardada — solo vendedor y supervisor -->
+    <div v-if="!esConductor" class="bg-white rounded-xl shadow-sm p-4 space-y-3">
       <div class="flex items-start justify-between">
         <div>
           <p class="text-sm font-semibold text-gray-700">Mi firma</p>
