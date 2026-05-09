@@ -9,4 +9,7 @@ php artisan storage:link --force 2>/dev/null || true
 php artisan config:cache 2>/dev/null || true
 php artisan migrate --force 2>/dev/null || true
 
+REVERB_PORT=${REVERB_PORT:-8080}
+php artisan reverb:start --host=0.0.0.0 --port=${REVERB_PORT} --no-interaction 2>/dev/null &
+
 exec apache2-foreground
