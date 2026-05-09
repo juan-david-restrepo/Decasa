@@ -1,0 +1,26 @@
+services:
+  - type: web
+    name: decasa-api
+    env: php
+    rootDir: decasa-api
+    buildCommand: composer install --no-dev --optimize-autoloader && php artisan storage:link
+    startCommand: php artisan queue:work --tries=3 --timeout=90
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: APP_DEBUG
+        value: "false"
+      - key: APP_TIMEZONE
+        value: America/Bogota
+      - key: SESSION_DRIVER
+        value: database
+      - key: QUEUE_CONNECTION
+        value: database
+      - key: CACHE_STORE
+        value: database
+      - key: BROADCAST_CONNECTION
+        value: log
+      - key: LOG_CHANNEL
+        value: stack
+      - key: LOG_LEVEL
+        value: warning
