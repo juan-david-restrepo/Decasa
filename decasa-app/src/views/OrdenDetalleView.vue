@@ -43,7 +43,7 @@ const pruebaEntregaVisible = computed(() =>
 const puedeEditar = computed(() => {
   if (!orden.value) return false
   if (['entregado', 'cancelado', 'listo_entrega', 'en_despacho'].includes(orden.value.estado)) return false
-  if (auth.usuario?.rol === 'vendedor' && orden.value.vendedor_id !== auth.usuario.id) return false
+  if (auth.usuario?.rol === 'vendedor' && Number(orden.value.vendedor_id) !== Number(auth.usuario.id)) return false
   return true
 })
 

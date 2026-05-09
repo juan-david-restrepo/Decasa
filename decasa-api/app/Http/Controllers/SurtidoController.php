@@ -7,6 +7,8 @@ use App\Events\SurtidoEnviado;
 use App\Events\SurtidoRechazado;
 use App\Models\Inventario;
 use App\Models\InventarioMovimiento;
+use App\Models\InventarioVariante;
+use App\Models\ProductoVariante;
 use App\Models\Surtido;
 use App\Models\SurtidoItem;
 use App\Models\SurtidoTienda;
@@ -14,6 +16,7 @@ use App\Models\Usuario;
 use App\Services\NotificacionService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 
 class SurtidoController extends Controller
 {
@@ -178,13 +181,83 @@ class SurtidoController extends Controller
                 );
                 $inv->increment('cantidad_disponible', $item->cantidad);
 
-                InventarioMovimiento::create([
+                $varianteId = null;
+                $esp = $item->especificaciones;
+                Log::info('[SURTIDO_ACEPTAR] item', [
                     'producto_id' => $item->producto_id,
-                    'tienda_id'   => $st->tienda_id,
-                    'tipo'        => 'entrada',
-                    'cantidad'    => $item->cantidad,
-                    'motivo'      => 'Surtido #' . $st->surtido_id,
-                    'usuario_id'  => $usuario->id,
+                    'cantidad' => $item->cantidad,
+                    'especificaciones' => $esp,
+                ]);
+
+                if ($esp && !empty($esp['marca']) && !empty($esp['tela']) && !empty($esp['color'])) {
+                    $marca = trim($esp['marca']);
+                    $tela  = trim($esp['tela']);
+                    $color = trim($esp['color']);
+
+                    Log::info('[SURTIDO_ACEPTAR] buscando variante', [
+                        'marca' => $marca,
+                        'tela' => $tela,
+                        'color' => $color,
+                    ]);
+
+                    // Buscar variante por comparacion en PHP (evita problemas de encoding/SQL)
+                    $variante = ProductoVariante::where('producto_id', $item->producto_id)
+                        ->get()
+                        ->first(function ($v) use ($marca, $tela, $color) {
+                            return mb_strtolower(trim($v->marca ?? '')) === mb_strtolower($marca)
+                                && mb_strtolower(trim($v->marca_tela)) === mb_strtolower($tela)
+                                && mb_strtolower(trim($v->nombre_color)) === mb_strtolower($color);
+                        });
+
+                    // Si no existe, crearla automaticamente
+                    if (!$variante) {
+                        $variante = ProductoVariante::create([
+                            'producto_id'  => $item->producto_id,
+                            'marca'        => $marca,
+                            'marca_tela'   => $tela,
+                            'nombre_color' => $color,
+                            'activo'       => true,
+                        ]);
+                        Log::info('[SURTIDO_ACEPTAR] variante creada automaticamente', $variante->toArray());
+
+                        // Crear InventarioVariante en tiendas donde existe el producto
+                        $tiendaIds = Inventario::where('producto_id', $item->producto_id)->pluck('tienda_id');
+                        foreach ($tiendaIds as $tid) {
+                            InventarioVariante::firstOrCreate(
+                                ['variante_id' => $variante->id, 'tienda_id' => $tid],
+                                ['cantidad_disponible' => 0, 'cantidad_reservada' => 0, 'stock_minimo' => 0]
+                            );
+                        }
+                        Log::info('[SURTIDO_ACEPTAR] InventarioVariante creado para ' . $tiendaIds->count() . ' tienda(s)');
+                    }
+
+                    $varianteId = $variante->id;
+                    $invVar = InventarioVariante::firstOrCreate(
+                        ['variante_id' => $varianteId, 'tienda_id' => $st->tienda_id],
+                        ['cantidad_disponible' => 0, 'cantidad_reservada' => 0, 'stock_minimo' => 0]
+                    );
+                    $invVar->increment('cantidad_disponible', $item->cantidad);
+                    Log::info('[SURTIDO_ACEPTAR] InventarioVariante actualizado', [
+                        'variante_id' => $varianteId,
+                        'tienda_id' => $st->tienda_id,
+                        'nuevo_stock' => $invVar->cantidad_disponible,
+                    ]);
+                } else {
+                    Log::warning('[SURTIDO_ACEPTAR] especificaciones vacias o nulas', ['esp' => $esp]);
+                }
+
+                $mov = InventarioMovimiento::create([
+                    'producto_id'  => $item->producto_id,
+                    'tienda_id'    => $st->tienda_id,
+                    'variante_id'  => $varianteId,
+                    'tipo'         => 'entrada',
+                    'cantidad'     => $item->cantidad,
+                    'motivo'       => 'Surtido #' . $st->surtido_id,
+                    'usuario_id'   => $usuario->id,
+                ]);
+                Log::info('[SURTIDO_ACEPTAR] movimiento creado', [
+                    'movimiento_id' => $mov->id,
+                    'variante_id' => $varianteId,
                 ]);
             }
 

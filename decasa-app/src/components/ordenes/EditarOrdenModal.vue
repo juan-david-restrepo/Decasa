@@ -2,6 +2,7 @@
 import { ref, watch } from 'vue'
 import { editarOrden, buscarProductos } from '@/api/ordenes'
 import { useToast } from '@/composables/useToast'
+import { useAuthStore } from '@/stores/auth'
 import { TELAS_CATALOGO, marcasOrdenadas, tiposTelaDeM, coloresDeTela } from '@/data/telasCatalogo'
 import ComboInput from '@/components/common/ComboInput.vue'
 import { XMarkIcon, SparklesIcon, MagnifyingGlassIcon } from '@heroicons/vue/24/outline'
@@ -17,6 +18,8 @@ const notas = ref('')
 const canal = ref('')
 const items = ref([])
 const guardando = ref(false)
+
+const auth       = useAuthStore()
 
 // product search per item
 const buscando  = ref({})
@@ -207,10 +210,14 @@ async function guardar() {
                 <div>
                   <label class="block text-xs font-medium text-gray-600 mb-1">Fecha entrega</label>
                   <input
+                    v-if="auth.usuario?.rol === 'supervisor'"
                     v-model="item.fecha_entrega_prom"
                     type="date"
                     class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                   />
+                  <p v-else class="text-sm text-gray-800 py-2">
+                    {{ item.fecha_entrega_prom || '—' }}
+                  </p>
                 </div>
               </div>
 

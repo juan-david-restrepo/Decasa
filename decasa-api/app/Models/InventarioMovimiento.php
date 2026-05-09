@@ -13,6 +13,7 @@ class InventarioMovimiento extends Model
     protected $fillable = [
         'producto_id',
         'tienda_id',
+        'variante_id',
         'tipo',
         'cantidad',
         'motivo',
@@ -32,5 +33,10 @@ class InventarioMovimiento extends Model
     public function usuario()
     {
         return $this->belongsTo(Usuario::class, 'usuario_id');
+    }
+
+    public function variante()
+    {
+        return $this->belongsTo(ProductoVariante::class, 'variante_id');
     }
 }

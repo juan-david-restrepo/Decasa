@@ -45,7 +45,7 @@ class VarianteController extends Controller
     }
 
     /**
-     * POST /api/productos/{id}/variantes  (solo supervisor)
+     * POST /api/productos/{id}/variantes
      *
      * Crea una variante y genera su registro de inventario en cada tienda
      * donde el producto ya existe.
@@ -58,6 +58,16 @@ class VarianteController extends Controller
             'nombre_color' => 'required|string|max:100',
             'foto_url'     => 'nullable|string|max:500',
         ]);
+
+        $user = $request->user();
+        if ($user->rol === 'vendedor') {
+            $existeEnTienda = Inventario::where('producto_id', $productoId)
+                ->where('tienda_id', $user->tienda_default_id)
+                ->exists();
+            if (!$existeEnTienda) {
+                return response()->json(['message' => 'El producto no existe en tu tienda.'], 403);
+            }
+        }
 
         $variante = DB::transaction(function () use ($productoId, $data) {
             $v = ProductoVariante::create([
@@ -135,12 +145,13 @@ class VarianteController extends Controller
         event(new InventarioActualizado((int) $data['tienda_id'], (int) $variante->producto_id, 'entrada'));
 
         InventarioMovimiento::create([
-            'producto_id' => $variante->producto_id,
-            'tienda_id'   => $data['tienda_id'],
-            'tipo'        => 'entrada',
-            'cantidad'    => $data['cantidad'],
-            'motivo'      => $data['motivo'] ?? "Entrada variante: " . implode(' · ', array_filter([$variante->marca, $variante->marca_tela, $variante->nombre_color])),
-            'usuario_id'  => $user->id,
+            'producto_id'  => $variante->producto_id,
+            'tienda_id'    => $data['tienda_id'],
+            'variante_id'  => $data['variante_id'],
+            'tipo'         => 'entrada',
+            'cantidad'     => $data['cantidad'],
+            'motivo'       => $data['motivo'] ?? "Entrada variante: " . implode(' · ', array_filter([$variante->marca, $variante->marca_tela, $variante->nombre_color])),
+            'usuario_id'   => $user->id,
         ]);
 
         return response()->json($inv->fresh(), 201);

@@ -11,6 +11,7 @@ import {
   ChevronUpIcon,
 } from '@heroicons/vue/24/outline'
 
+const emit     = defineEmits(['aceptado'])
 const surtidos = useSurtidosStore()
 const toast    = useToast()
 
@@ -32,6 +33,7 @@ async function aceptar(st) {
   try {
     await aceptarSurtido(st.id)
     surtidos.quitarPendiente(st.id)
+    emit('aceptado')
     toast.success(`Surtido #${st.surtido_id} aceptado. Inventario actualizado.`)
   } catch (e) {
     toast.error(e.response?.data?.message ?? 'Error al aceptar el surtido.')

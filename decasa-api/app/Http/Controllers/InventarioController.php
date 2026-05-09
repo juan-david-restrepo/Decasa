@@ -259,7 +259,7 @@ class InventarioController extends Controller
             $tiendaId = (int) $request->query('tienda_id');
         }
 
-        $movimientos = InventarioMovimiento::with('usuario:id,nombre')
+        $movimientos = InventarioMovimiento::with('usuario:id,nombre', 'variante:id,marca,marca_tela,nombre_color')
             ->where('producto_id', $productoId)
             ->where('tienda_id', $tiendaId)
             ->orderByDesc('created_at')

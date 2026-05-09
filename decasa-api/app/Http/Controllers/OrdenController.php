@@ -490,8 +490,8 @@ class OrdenController extends Controller
                         }
                     }
 
-                    // Fecha entrega
-                    if (array_key_exists('fecha_entrega_prom', $itemData)) {
+                    // Fecha entrega (solo supervisor)
+                    if ($usuario->rol === 'supervisor' && array_key_exists('fecha_entrega_prom', $itemData)) {
                         $nueva  = $itemData['fecha_entrega_prom'];
                         $actual = $item->fecha_entrega_prom ? substr((string) $item->fecha_entrega_prom, 0, 10) : null;
                         if ($nueva !== $actual) {

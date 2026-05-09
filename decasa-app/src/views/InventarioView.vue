@@ -214,6 +214,9 @@ async function cargarInventario(reset = false) {
     loadingMore.value = false
   }
   if (tieneMas.value) nextTick(setupObserver)
+  if (reset) {
+    nextTick(() => inventario.value.forEach(cargarVariantes))
+  }
 }
 
 function loadMore() {
@@ -285,7 +288,7 @@ async function guardarStock() {
 
 // ── Categorías que admiten variantes de tela/color ───────────────────────────
 // Incluye formas con y sin tilde para cubrir cualquier escritura en la BD
-const KEYWORDS_TAPIZADOS = ['sofa', 'sofá', 'silla', 'sillón', 'sillon']
+const KEYWORDS_TAPIZADOS = ['sofa', 'sofá', 'silla', 'sillón', 'sillon', 'tapiz', 'tela', 'mueble', 'tapiceria', 'tapicería', 'cojin', 'cojín']
 
 function esTapizado(item) {
   const cat = (item.producto?.categoria ?? '').toLowerCase().trim()
@@ -335,17 +338,23 @@ const colorFinal = computed(() =>
   formVariante.value.nombre_color === 'Otro' ? formVariante.value.colorManual : formVariante.value.nombre_color
 )
 
+async function cargarVariantes(item) {
+  const pid = item.producto_id
+  if (variantesData.value[pid] !== undefined) return
+  varianteCargando.value[pid] = true
+  try {
+    const { data } = await getVariantes(pid, esVistaGlobal.value ? null : tiendaId.value)
+    variantesData.value[pid] = data
+  } finally {
+    varianteCargando.value[pid] = false
+  }
+}
+
 async function toggleVariantes(item) {
   const pid = item.producto_id
   variantesAbiertas.value[pid] = !variantesAbiertas.value[pid]
-  if (variantesAbiertas.value[pid] && !variantesData.value[pid]) {
-    varianteCargando.value[pid] = true
-    try {
-      const { data } = await getVariantes(pid, esVistaGlobal.value ? null : tiendaId.value)
-      variantesData.value[pid] = data
-    } finally {
-      varianteCargando.value[pid] = false
-    }
+  if (!variantesData.value[pid]) {
+    await cargarVariantes(item)
   }
 }
 
@@ -499,7 +508,7 @@ onMounted(async () => {
     </div>
 
     <!-- Panel de surtidos pendientes (solo vendedor) -->
-    <SurtidosPendientesPanel v-if="!auth.isSupervisor" />
+    <SurtidosPendientesPanel v-if="!auth.isSupervisor" @aceptado="cargarInventario(true)" />
 
     <!-- Sin tienda seleccionada -->
     <EmptyState
@@ -568,7 +577,6 @@ onMounted(async () => {
             </div>
             <div class="flex items-center gap-2 flex-shrink-0">
               <button
-                v-if="!esVistaGlobal"
                 @click="abrirHistorial(item)"
                 class="text-gray-500 text-xs font-medium flex items-center gap-1"
               >
@@ -618,29 +626,25 @@ onMounted(async () => {
             </span>
           </div>
 
-          <!-- Variantes tela/color — solo productos tapizados -->
-          <div v-if="!esVistaGlobal && esTapizado(item)" class="border-t border-gray-100 pt-2">
-            <button
-              @click="toggleVariantes(item)"
-              class="text-xs text-blue-600 font-medium flex items-center gap-1"
-            >
-              <span>{{ variantesAbiertas[item.producto_id] ? '▾' : '▸' }}</span>
-              Variantes de tela/color
+          <!-- Variantes tela/color -->
+          <div class="border-t border-gray-100 pt-2">
+            <div class="flex items-center gap-2">
+              <span class="text-xs text-blue-600 font-medium">Variantes de tela/color</span>
               <span v-if="variantesData[item.producto_id]?.length"
-                class="bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded-full font-bold">
+                class="bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded-full text-xs font-bold">
                 {{ variantesData[item.producto_id].length }}
               </span>
-            </button>
+            </div>
 
-            <div v-if="variantesAbiertas[item.producto_id]" class="mt-2 space-y-2">
+            <div class="mt-2 space-y-2">
               <div v-if="varianteCargando[item.producto_id]" class="text-xs text-gray-400">Cargando...</div>
-              <template v-else>
+              <template v-else-if="variantesData[item.producto_id]">
                 <!-- Chips de variantes -->
                 <div class="flex flex-wrap gap-1.5">
                   <button
                     v-for="v in variantesData[item.producto_id]"
                     :key="v.id"
-                    @click="puedeGestionar && abrirStockVariante(v, item)"
+                    @click="!esVistaGlobal && puedeGestionar && abrirStockVariante(v, item)"
                     :class="['px-2.5 py-1 rounded-full text-xs font-medium border transition-colors',
                       v.stock_libre > 0
                         ? 'bg-green-50 border-green-300 text-green-800'
@@ -656,15 +660,15 @@ onMounted(async () => {
                   </span>
                 </div>
 
-                <!-- Supervisor: crear variante -->
                 <button
-                  v-if="auth.isSupervisor"
+                  v-if="!esVistaGlobal && puedeGestionar"
                   @click="abrirNuevaVariante(item)"
                   class="text-xs text-blue-500 font-medium flex items-center gap-0.5 hover:text-blue-700"
                 >
                   + Nueva variante
                 </button>
               </template>
+              <div v-else class="text-xs text-gray-400 italic">Cargando variantes...</div>
             </div>
           </div>
         </li>
@@ -966,6 +970,9 @@ onMounted(async () => {
               </span>
               <div class="flex-1 min-w-0">
                 <p class="text-sm font-medium text-gray-800">{{ m.cantidad }} unidad(es)</p>
+                <p v-if="m.variante" class="text-xs text-gray-600 truncate">
+                  {{ [m.variante.marca, m.variante.marca_tela, m.variante.nombre_color].filter(Boolean).join(' · ') }}
+                </p>
                 <p class="text-xs text-gray-500 truncate">{{ m.motivo ?? '—' }}</p>
                 <p class="text-xs text-gray-400">{{ new Date(m.created_at).toLocaleString('es-CO', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) }}</p>
               </div>

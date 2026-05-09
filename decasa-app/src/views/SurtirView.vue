@@ -158,6 +158,7 @@ function inicializarCantidadesPorTienda() {
         producto_id: p.producto.id,
         nombre: p.producto.nombre,
         cantidad: p.cantidad,
+        especificaciones: p.especificaciones,
       }))
     }
   })
@@ -212,7 +213,7 @@ function itemsPorTienda(tid) {
     producto_id: p.producto_id,
     nombre: p.nombre,
     cantidad: p.cantidad,
-    especificaciones: null,
+    especificaciones: especificacionesLimpias(p.especificaciones),
   }))
 }
 
