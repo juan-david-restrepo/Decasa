@@ -3,10 +3,16 @@ const CACHE_NAME = 'decasa-v1'
 // Recursos del app shell a pre-cachear
 const SHELL_URLS = ['/', '/index.html']
 
-// Instalar: pre-cachear el shell
+// Instalar: pre-cachear el shell (cada URL por separado para evitar que una falla bloquee todo)
 self.addEventListener('install', (event) => {
   event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => cache.addAll(SHELL_URLS))
+    caches.open(CACHE_NAME).then((cache) =>
+      Promise.allSettled(
+        SHELL_URLS.map((url) =>
+          cache.add(url).catch(() => console.warn('[SW] No se pudo cachear', url))
+        )
+      )
+    )
   )
   self.skipWaiting()
 })

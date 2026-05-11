@@ -8,6 +8,7 @@ import { useSurtidosStore } from '@/stores/surtidos'
 import { useSurtidosSocket } from '@/composables/useSurtidosSocket'
 import ScrollToTop from '@/components/common/ScrollToTop.vue'
 import ToastContainer from '@/components/common/ToastContainer.vue'
+import AppInstallPrompt from '@/components/common/AppInstallPrompt.vue'
 import {
   HomeIcon,
   ClipboardDocumentListIcon,
@@ -342,6 +343,9 @@ function formatFecha(iso) {
 
     <!-- Scroll to top -->
     <ScrollToTop />
+
+    <!-- PWA install prompt -->
+    <AppInstallPrompt />
 
     <!-- Toasts globales -->
     <ToastContainer />

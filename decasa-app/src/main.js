@@ -17,6 +17,8 @@ app.mount('#app')
 
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/sw.js').catch(() => {})
+    navigator.serviceWorker.register('/sw.js')
+      .then((reg) => console.info('[PWA] Service worker registrado', reg.scope))
+      .catch((err) => console.warn('[PWA] Error al registrar service worker:', err))
   })
 }
