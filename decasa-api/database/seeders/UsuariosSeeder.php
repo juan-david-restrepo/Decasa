@@ -10,7 +10,7 @@ class UsuariosSeeder extends Seeder
 {
     public function run(): void
     {
-        DB::table('usuarios')->insert([
+        $usuarios = [
             [
                 'nombre'            => 'Admin Supervisor',
                 'email'             => 'admin@decasa.com',
@@ -27,6 +27,21 @@ class UsuariosSeeder extends Seeder
                 'tienda_default_id' => 1,
                 'activo'            => true,
             ],
-        ]);
+            [
+                'nombre'            => 'Conductor Demo',
+                'email'             => 'conductor@decasa.com',
+                'password'          => Hash::make('Decasa2024!'),
+                'rol'               => 'conductor',
+                'tienda_default_id' => null,
+                'activo'            => true,
+            ],
+        ];
+
+        foreach ($usuarios as $usuario) {
+            DB::table('usuarios')->updateOrInsert(
+                ['email' => $usuario['email']],
+                $usuario
+            );
+        }
     }
 }
