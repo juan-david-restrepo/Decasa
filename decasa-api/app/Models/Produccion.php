@@ -17,6 +17,7 @@ class Produccion extends Model
         'fecha_real',
         'estado',
         'motivo_retraso',
+        'despachado_por',
     ];
 
     protected function casts(): array
@@ -31,6 +32,18 @@ class Produccion extends Model
     public function ordenItem()
     {
         return $this->belongsTo(OrdenItem::class, 'orden_item_id');
+    }
+
+    public function pasos()
+    {
+        return $this->hasMany(ProduccionPaso::class, 'produccion_id')->orderBy('orden');
+    }
+
+    public function pasoActual()
+    {
+        return $this->hasOne(ProduccionPaso::class, 'produccion_id')
+            ->whereIn('estado', ['en_proceso', 'pendiente'])
+            ->orderBy('orden');
     }
 
     public function diasRestantes(): int

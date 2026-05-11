@@ -20,6 +20,7 @@ class Usuario extends Authenticatable
         'password',
         'rol',
         'facturacion',
+        'es_tapicero',
         'tienda_default_id',
         'activo',
         'firma_url',
@@ -34,6 +35,7 @@ class Usuario extends Authenticatable
             'password'    => 'hashed',
             'activo'      => 'boolean',
             'facturacion' => 'boolean',
+            'es_tapicero' => 'boolean',
         ];
     }
 

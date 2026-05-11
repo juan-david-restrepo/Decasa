@@ -35,6 +35,7 @@ class OrdenController extends Controller
             'cliente:id,nombre,telefono',
             'tienda:id,nombre',
             'vendedor:id,nombre',
+            'items.produccion.pasoActual',
         ])->withSum('pagos', 'monto');
 
         if ($usuario->rol === 'vendedor') {
@@ -73,6 +74,25 @@ class OrdenController extends Controller
         $ordenes->getCollection()->transform(function ($o) {
             $o->total_pagado    = (float) ($o->pagos_sum_monto ?? 0);
             $o->saldo_pendiente = (float) $o->valor_total - $o->total_pagado;
+
+            // Paso actual de producción (solo órdenes en_produccion con pasos activos)
+            $o->paso_produccion_actual = null;
+            if ($o->estado === 'en_produccion') {
+                foreach ($o->items as $item) {
+                    if (! $item->produccion) continue;
+                    if ($item->produccion->estado === 'pendiente_despachador') {
+                        $o->paso_produccion_actual = 'pendiente_despachador';
+                        break;
+                    }
+                    $paso = $item->produccion->pasoActual;
+                    if ($paso && $paso->estado === 'en_proceso') {
+                        $o->paso_produccion_actual = $paso->tipo_proceso;
+                        break;
+                    }
+                }
+            }
+
+            unset($o->items);
             return $o;
         });
 

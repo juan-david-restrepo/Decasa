@@ -101,9 +101,19 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/usuarios/{id}/reset-password', [UsuarioController::class, 'resetPassword']);
     });
 
-    // Producción
+    // Producción — listado y gestión (supervisor y vendedor)
     Route::get('/produccion',        [ProduccionController::class, 'index']);
-    Route::patch('/produccion/{id}', [ProduccionController::class, 'update']);
+    Route::patch('/produccion/{id}', [ProduccionController::class, 'update'])->whereNumber('id');
+
+    // Producción — flujo de pasos (ebanista y tapicero-supervisor)
+    Route::get('/produccion/mis-pasos',                        [ProduccionController::class, 'misPasos']);
+    Route::get('/produccion/historial-pasos',                  [ProduccionController::class, 'historialPasos']);
+    Route::patch('/produccion/pasos/{id}/completar',           [ProduccionController::class, 'completarPaso'])->whereNumber('id');
+
+    // Producción — despacho de producción (despachador)
+    Route::get('/produccion/pendientes-despacho',              [ProduccionController::class, 'pendientesDespacho']);
+    Route::get('/produccion/historial-despacho',               [ProduccionController::class, 'historialDespacho']);
+    Route::patch('/produccion/{id}/completar-despacho',        [ProduccionController::class, 'completarDespacho'])->whereNumber('id');
 
     // Stats — ambos roles (vendedor ve solo lo suyo, supervisor ve todo)
     Route::prefix('stats')->group(function () {
