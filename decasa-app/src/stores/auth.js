@@ -9,6 +9,10 @@ export const useAuthStore = defineStore('auth', () => {
 
   const isAuthenticated = computed(() => !!token.value)
   const isSupervisor    = computed(() => usuario.value?.rol === 'supervisor')
+  const isEbanista      = computed(() => usuario.value?.rol === 'ebanista')
+  const isTapicero      = computed(() => usuario.value?.rol === 'supervisor' && !!usuario.value?.es_tapicero)
+  const isDespachador   = computed(() => usuario.value?.rol === 'despachador')
+  const tieneAccesoPasos = computed(() => isEbanista.value || isTapicero.value)
 
   async function login(email, password) {
     const { data } = await apiLogin(email, password)
@@ -17,6 +21,7 @@ export const useAuthStore = defineStore('auth', () => {
       id:                data.id,
       nombre:            data.nombre,
       rol:               data.rol,
+      es_tapicero:       data.es_tapicero ?? false,
       tienda_default_id: data.tienda_default_id,
       firma_url:         data.firma_url ?? null,
     }
@@ -34,6 +39,7 @@ export const useAuthStore = defineStore('auth', () => {
         nombre:            data.nombre,
         email:             data.email,
         rol:               data.rol,
+        es_tapicero:       data.es_tapicero ?? false,
         tienda_default_id: data.tienda_default_id,
         firma_url:         data.firma_url ?? null,
       }
@@ -60,5 +66,5 @@ export const useAuthStore = defineStore('auth', () => {
     localStorage.removeItem('usuario')
   }
 
-  return { token, usuario, isAuthenticated, isSupervisor, login, fetchMe, setFirma, logout, clearSession }
+  return { token, usuario, isAuthenticated, isSupervisor, isEbanista, isTapicero, isDespachador, tieneAccesoPasos, login, fetchMe, setFirma, logout, clearSession }
 })

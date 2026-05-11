@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { createUsuario } from '@/api/usuarios'
 import { getTiendas } from '@/api/ordenes'
@@ -17,10 +17,14 @@ const form = ref({
   password_confirmation: '',
   rol: 'vendedor',
   facturacion: false,
+  es_tapicero: false,
   tienda_default_id: '',
 })
 
 const errores = ref({})
+
+const rolesSinTienda = ['conductor', 'ebanista', 'despachador']
+const requiereTienda = computed(() => !rolesSinTienda.includes(form.value.rol))
 
 function errMsg(e) {
   if (!e) return ''
@@ -42,7 +46,7 @@ function validar() {
   if (!form.value.password) errores.value.password = 'La contraseña es obligatoria'
   else if (form.value.password.length < 8) errores.value.password = 'Mínimo 8 caracteres'
   if (form.value.password !== form.value.password_confirmation) errores.value.password_confirmation = 'Las contraseñas no coinciden'
-  if (form.value.rol !== 'conductor' && !form.value.tienda_default_id) errores.value.tienda_default_id = 'Selecciona una tienda'
+  if (requiereTienda.value && !form.value.tienda_default_id) errores.value.tienda_default_id = 'Selecciona una tienda'
   return Object.keys(errores.value).length === 0
 }
 
@@ -59,7 +63,8 @@ async function submit() {
       password_confirmation: form.value.password_confirmation,
       rol: form.value.rol,
       facturacion: form.value.facturacion,
-      tienda_default_id: form.value.tienda_default_id,
+      es_tapicero: form.value.es_tapicero,
+      tienda_default_id: requiereTienda.value ? form.value.tienda_default_id : null,
     })
     router.push({ name: 'usuarios' })
   } catch (e) {
@@ -146,7 +151,19 @@ async function submit() {
           <option value="vendedor">Vendedor</option>
           <option value="supervisor">Supervisor</option>
           <option value="conductor">Conductor</option>
+          <option value="ebanista">Ebanista</option>
+          <option value="despachador">Despachador</option>
         </select>
+      </div>
+
+      <!-- Descripción del rol de producción -->
+      <div v-if="['ebanista', 'despachador'].includes(form.rol)" class="bg-amber-50 rounded-lg px-3 py-2 text-xs text-amber-700">
+        <span v-if="form.rol === 'ebanista'">
+          El ebanista puede ver y completar los pasos de <strong>ebanistería</strong> y <strong>laca</strong> en las órdenes personalizadas.
+        </span>
+        <span v-else>
+          El despachador recibe las órdenes cuando terminan todos los pasos de producción y las envía a entrega.
+        </span>
       </div>
 
       <!-- Facturación (solo vendedores) -->
@@ -163,8 +180,22 @@ async function submit() {
         </div>
       </div>
 
+      <!-- Tapicero (solo supervisores) -->
+      <div v-if="form.rol === 'supervisor'" class="flex items-start gap-3 py-2">
+        <input
+          id="es_tapicero"
+          type="checkbox"
+          v-model="form.es_tapicero"
+          class="mt-0.5 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+        />
+        <div>
+          <label for="es_tapicero" class="text-sm font-medium text-gray-700 cursor-pointer">Encargado de tapicería</label>
+          <p class="text-xs text-gray-500 mt-0.5">Podrá completar los pasos de <strong>tapizado</strong> y <strong>laca</strong> en producción personalizada.</p>
+        </div>
+      </div>
+
       <!-- Tienda -->
-      <div v-if="form.rol !== 'conductor'">
+      <div v-if="requiereTienda">
         <label class="block text-sm font-medium text-gray-700 mb-1">Tienda predeterminada *</label>
         <select
           v-model="form.tienda_default_id"

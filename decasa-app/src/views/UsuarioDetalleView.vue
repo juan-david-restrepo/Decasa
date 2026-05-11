@@ -33,11 +33,18 @@ const nuevaPassword = ref('')
 const confirmacionPassword = ref('')
 
 // Edit form
-const editForm = ref({ nombre: '', email: '', rol: '', facturacion: false, tienda_default_id: '' })
+const editForm = ref({ nombre: '', email: '', rol: '', facturacion: false, es_tapicero: false, tienda_default_id: '' })
+const rolesSinTienda = ['conductor', 'ebanista', 'despachador']
 
-const rolLabel = computed(() =>
-  usuario.value?.rol === 'supervisor' ? 'Supervisor' : usuario.value?.rol === 'conductor' ? 'Conductor' : 'Vendedor'
-)
+const ROL_LABELS = {
+  supervisor: 'Supervisor',
+  conductor:  'Conductor',
+  ebanista:   'Ebanista',
+  despachador: 'Despachador',
+  vendedor:   'Vendedor',
+}
+
+const rolLabel = computed(() => ROL_LABELS[usuario.value?.rol] ?? 'Vendedor')
 
 async function cargarUsuario() {
   loading.value = true
@@ -101,6 +108,7 @@ function openEditModal() {
     email: usuario.value.email,
     rol: usuario.value.rol,
     facturacion: usuario.value.facturacion ?? false,
+    es_tapicero: usuario.value.es_tapicero ?? false,
     tienda_default_id: usuario.value.tienda_default_id,
   }
   actionError.value = ''
@@ -119,12 +127,14 @@ async function submitEdit() {
   }
   editLoading.value = true
   try {
+    const sinTienda = rolesSinTienda.includes(editForm.value.rol)
     await updateUsuario(usuario.value.id, {
       nombre: editForm.value.nombre.trim(),
       email: editForm.value.email.trim(),
       rol: editForm.value.rol,
       facturacion: editForm.value.rol === 'vendedor' ? editForm.value.facturacion : false,
-      tienda_default_id: editForm.value.rol === 'conductor' ? null : editForm.value.tienda_default_id,
+      es_tapicero: editForm.value.rol === 'supervisor' ? editForm.value.es_tapicero : false,
+      tienda_default_id: sinTienda ? null : editForm.value.tienda_default_id,
     })
     showEditModal.value = false
     await cargarUsuario()
@@ -167,7 +177,11 @@ onMounted(async () => {
         v-if="usuario"
         :class="[
           'inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium',
-          usuario.rol === 'supervisor' ? 'bg-blue-100 text-blue-700' : usuario.rol === 'conductor' ? 'bg-amber-100 text-amber-700' : 'bg-gray-100 text-gray-600'
+          usuario.rol === 'supervisor'  ? 'bg-blue-100 text-blue-700' :
+          usuario.rol === 'conductor'   ? 'bg-amber-100 text-amber-700' :
+          usuario.rol === 'ebanista'    ? 'bg-orange-100 text-orange-700' :
+          usuario.rol === 'despachador' ? 'bg-purple-100 text-purple-700' :
+          'bg-gray-100 text-gray-600'
         ]"
       >
         {{ rolLabel }}
@@ -193,7 +207,16 @@ onMounted(async () => {
             <p class="font-medium text-gray-800">{{ usuario.email }}</p>
           </div>
         </div>
-        <div v-if="usuario.tienda_default && usuario.rol !== 'conductor'" class="flex items-center gap-3">
+        <div v-if="usuario.es_tapicero && usuario.rol === 'supervisor'" class="flex items-center gap-3">
+          <div class="w-5 h-5 flex-shrink-0 flex items-center justify-center">
+            <span class="text-sm">🪡</span>
+          </div>
+          <div>
+            <p class="text-xs text-gray-400">Especialidad</p>
+            <p class="font-medium text-gray-800">Encargado de tapicería y laca</p>
+          </div>
+        </div>
+        <div v-if="usuario.tienda_default && !rolesSinTienda.includes(usuario.rol)" class="flex items-center gap-3">
           <MapPinIcon class="w-5 h-5 text-gray-400 flex-shrink-0" />
           <div>
             <p class="text-xs text-gray-400">Tienda predeterminada</p>
@@ -352,6 +375,8 @@ onMounted(async () => {
               <option value="vendedor">Vendedor</option>
               <option value="supervisor">Supervisor</option>
               <option value="conductor">Conductor</option>
+              <option value="ebanista">Ebanista</option>
+              <option value="despachador">Despachador</option>
             </select>
           </div>
           <div v-if="editForm.rol === 'vendedor'" class="flex items-start gap-3 py-2">
@@ -366,7 +391,19 @@ onMounted(async () => {
               <p class="text-xs text-gray-500 mt-0.5">Podrá ver órdenes entregadas de toda la tienda para facturación externa.</p>
             </div>
           </div>
-          <div v-if="editForm.rol !== 'conductor'">
+          <div v-if="editForm.rol === 'supervisor'" class="flex items-start gap-3 py-2">
+            <input
+              id="edit-tapicero"
+              type="checkbox"
+              v-model="editForm.es_tapicero"
+              class="mt-0.5 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+            />
+            <div>
+              <label for="edit-tapicero" class="text-sm font-medium text-gray-700 cursor-pointer">Encargado de tapicería</label>
+              <p class="text-xs text-gray-500 mt-0.5">Puede completar pasos de <strong>tapizado</strong> y <strong>laca</strong>.</p>
+            </div>
+          </div>
+          <div v-if="!rolesSinTienda.includes(editForm.rol)">
             <label class="block text-sm font-medium text-gray-700 mb-1">Tienda</label>
             <select v-model="editForm.tienda_default_id" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
               <option value="">Seleccionar...</option>

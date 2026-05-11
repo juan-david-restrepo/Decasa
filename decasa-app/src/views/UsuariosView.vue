@@ -106,12 +106,22 @@ function goToCrear() {
   router.push({ name: 'usuario-crear' })
 }
 
-const rolBadgeCls = (rol) =>
-  rol === 'supervisor'
-    ? 'bg-blue-100 text-blue-700'
-    : rol === 'conductor'
-    ? 'bg-amber-100 text-amber-700'
-    : 'bg-gray-100 text-gray-600'
+const rolBadgeCls = (rol) => {
+  const m = {
+    supervisor:  'bg-blue-100 text-blue-700',
+    conductor:   'bg-amber-100 text-amber-700',
+    ebanista:    'bg-orange-100 text-orange-700',
+    despachador: 'bg-purple-100 text-purple-700',
+  }
+  return m[rol] ?? 'bg-gray-100 text-gray-600'
+}
+
+const rolLabel = (u) => {
+  const m = { supervisor: 'Supervisor', conductor: 'Conductor', ebanista: 'Ebanista', despachador: 'Despachador', vendedor: 'Vendedor' }
+  let label = m[u.rol] ?? u.rol
+  if (u.rol === 'supervisor' && u.es_tapicero) label += ' · Tapicero'
+  return label
+}
 
 const estadoBadgeCls = (activo) =>
   activo
@@ -169,6 +179,8 @@ onBeforeUnmount(() => {
           <option value="vendedor">Vendedores</option>
           <option value="supervisor">Supervisores</option>
           <option value="conductor">Conductores</option>
+          <option value="ebanista">Ebanistas</option>
+          <option value="despachador">Despachadores</option>
         </select>
       </div>
       <div>
@@ -213,16 +225,16 @@ onBeforeUnmount(() => {
           <div class="flex items-center gap-2 mb-1">
             <p class="font-medium text-gray-800 truncate">{{ u.nombre }}</p>
             <span :class="['inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium', rolBadgeCls(u.rol)]">
-              {{ u.rol === 'supervisor' ? 'Admin' : u.rol === 'conductor' ? 'Conductor' : 'Vendedor' }}
+              {{ rolLabel(u) }}
             </span>
             <span :class="['inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium', estadoBadgeCls(u.activo)]">
               {{ estadoLabel(u.activo) }}
             </span>
           </div>
           <p class="text-xs text-gray-400 truncate">{{ u.email }}</p>
-          <p v-if="u.tienda && u.rol !== 'conductor'" class="text-xs text-gray-400 flex items-center gap-1 mt-0.5">
+          <p v-if="u.tienda_default && !['conductor','ebanista','despachador'].includes(u.rol)" class="text-xs text-gray-400 flex items-center gap-1 mt-0.5">
             <MapPinIcon class="w-3.5 h-3.5" />
-            {{ u.tienda.nombre }}
+            {{ u.tienda_default.nombre }}
           </p>
         </div>
         <ChevronRightIcon class="w-5 h-5 text-gray-300 flex-shrink-0" />

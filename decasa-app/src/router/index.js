@@ -21,6 +21,9 @@ const routes = [
   { path: '/despacho', name: 'despacho', component: () => import('@/views/DespachoView.vue'), meta: { requiresAuth: true, requiresSupervisor: true } },
   { path: '/mis-entregas', name: 'mis-entregas', component: () => import('@/views/MisEntregasView.vue'), meta: { requiresAuth: true, requiresConductor: true } },
   { path: '/surtir', name: 'surtir', component: () => import('@/views/SurtirView.vue'), meta: { requiresAuth: true, requiresSupervisor: true } },
+  // Nuevas rutas para roles de producción
+  { path: '/mis-pasos', name: 'mis-pasos', component: () => import('@/views/EbanistaView.vue'), meta: { requiresAuth: true, requiresProduccionWorker: true } },
+  { path: '/despacho-produccion', name: 'despacho-produccion', component: () => import('@/views/DespachadorProduccionView.vue'), meta: { requiresAuth: true, requiresDespachador: true } },
 ]
 
 const router = createRouter({
@@ -35,6 +38,8 @@ router.beforeEach((to) => {
   if (to.meta.guest && auth.isAuthenticated) return { name: 'dashboard' }
   if (to.meta.requiresSupervisor && !auth.isSupervisor) return { name: 'dashboard' }
   if (to.meta.requiresConductor && auth.usuario?.rol !== 'conductor') return { name: 'dashboard' }
+  if (to.meta.requiresDespachador && auth.usuario?.rol !== 'despachador') return { name: 'dashboard' }
+  if (to.meta.requiresProduccionWorker && !auth.tieneAccesoPasos) return { name: 'dashboard' }
 })
 
 export default router

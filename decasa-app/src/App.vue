@@ -5,6 +5,8 @@ import { useAuthStore } from '@/stores/auth'
 import { useNotificacionesStore } from '@/stores/notificaciones'
 import { useDespachoStore } from '@/stores/despacho'
 import { useSurtidosStore } from '@/stores/surtidos'
+import { usePasosStore } from '@/stores/pasos'
+import { useDespachoProduccionStore } from '@/stores/despachoProduccion'
 import { useSurtidosSocket } from '@/composables/useSurtidosSocket'
 import ScrollToTop from '@/components/common/ScrollToTop.vue'
 import ToastContainer from '@/components/common/ToastContainer.vue'
@@ -42,6 +44,8 @@ const auth   = useAuthStore()
 const notif  = useNotificacionesStore()
 const despacho = useDespachoStore()
 const surtidos = useSurtidosStore()
+const pasos    = usePasosStore()
+const despachoProd = useDespachoProduccionStore()
 const { conectar: conectarSurtidos } = useSurtidosSocket()
 
 const showNav    = computed(() => auth.isAuthenticated && route.name !== 'login')
@@ -59,14 +63,32 @@ watch(() => auth.isAuthenticated, (isAuth) => {
   if (auth.usuario?.rol === 'vendedor') {
     surtidos.cargarPendientes()
   }
+  if (auth.usuario?.rol === 'ebanista' || (auth.usuario?.rol === 'supervisor' && auth.usuario?.es_tapicero)) {
+    pasos.cargar()
+  }
+  if (auth.usuario?.rol === 'despachador') {
+    despachoProd.cargar()
+  }
 }, { immediate: true })
+
+// Reconectar al supervisor tapicero también como trabajador de producción
+// (solo necesita las notificaciones normales — ya las recibe por su canal)
 
 // WebSockets — espera a que usuario esté cargado (fetchMe) para tener id y rol
 watch(() => auth.usuario?.id, (id) => {
   if (!id || !window.Echo) return
   window.Echo.channel(`notificaciones.${id}`)
     .stopListening('.nueva.notificacion')
-    .listen('.nueva.notificacion', n => { notif.agregarNueva(n) })
+    .listen('.nueva.notificacion', n => {
+      notif.agregarNueva(n)
+      // Recargar badge de pasos cuando llega una notificación de producción
+      if (n.tipo === 'paso_produccion' && (auth.isEbanista || auth.isTapicero)) {
+        pasos.cargar()
+      }
+      if (n.tipo === 'paso_produccion' && auth.isDespachador) {
+        despachoProd.cargar()
+      }
+    })
   conectarSurtidos()
 })
 
@@ -91,6 +113,18 @@ const navItems = computed(() => {
     return [
       { name: 'mis-entregas',        label: 'Entregas',  icon: TruckIcon, badge: despacho.ordenesPendientes },
       { name: 'mis-stats-conductor', label: 'Estadíst.', icon: PresentationChartLineIcon },
+    ]
+  }
+  if (auth.usuario?.rol === 'ebanista' || (auth.usuario?.rol === 'supervisor' && auth.usuario?.es_tapicero)) {
+    return [
+      { name: 'mis-pasos', label: 'Mis pasos', icon: WrenchScrewdriverIcon, badge: pasos.pendientesCount },
+      { name: 'perfil',    label: 'Perfil',    icon: UserCircleIcon },
+    ]
+  }
+  if (auth.usuario?.rol === 'despachador') {
+    return [
+      { name: 'despacho-produccion', label: 'Despacho prod.', icon: ArchiveBoxArrowDownIcon, badge: despachoProd.pendientesCount },
+      { name: 'perfil',              label: 'Perfil',          icon: UserCircleIcon },
     ]
   }
   return [
@@ -155,6 +189,7 @@ function tipoIcono(tipo) {
     surtido_aceptado:   CheckCircleIcon,
     surtido_rechazado:  XCircleIcon,
     facturar:           ClipboardDocumentListIcon,
+    paso_produccion:    WrenchScrewdriverIcon,
   }
   return icons[tipo] ?? BellIcon
 }

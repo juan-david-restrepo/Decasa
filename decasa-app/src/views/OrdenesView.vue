@@ -131,6 +131,17 @@ function formatFecha(dateStr) {
   return d.toLocaleDateString('es-CO', { day: '2-digit', month: 'short' })
 }
 
+const PASO_LABEL = {
+  ebanisteria:          { text: 'Ebanistería',       cls: 'bg-orange-100 text-orange-700' },
+  tapizado:             { text: 'Tapizado',           cls: 'bg-teal-100 text-teal-700'    },
+  laca:                 { text: 'Laca',               cls: 'bg-indigo-100 text-indigo-700' },
+  pendiente_despachador:{ text: 'Lista p/ despacho',  cls: 'bg-purple-100 text-purple-700' },
+}
+
+function pasoInfo(paso) {
+  return PASO_LABEL[paso] ?? null
+}
+
 const { listen } = useRealtime()
 
 onMounted(async () => {
@@ -259,6 +270,12 @@ onUnmounted(() => {
               </div>
               <p class="text-sm text-gray-600 truncate">{{ o.cliente?.nombre }}</p>
               <p class="text-xs text-gray-400 mt-0.5">{{ o.tienda?.nombre }} · {{ formatFecha(o.created_at) }}</p>
+              <span
+                v-if="o.paso_produccion_actual && pasoInfo(o.paso_produccion_actual)"
+                :class="['inline-block mt-1.5 text-xs font-semibold px-2 py-0.5 rounded-full', pasoInfo(o.paso_produccion_actual).cls]"
+              >
+                En producción: {{ pasoInfo(o.paso_produccion_actual).text }}
+              </span>
             </div>
             <div class="text-right flex-shrink-0">
               <p class="text-sm font-semibold text-gray-700"><MoneyDisplay :amount="o.valor_total" /></p>

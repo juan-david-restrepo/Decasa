@@ -9,6 +9,7 @@ import {
   UsersIcon,
   UserPlusIcon,
   ArchiveBoxIcon,
+  ArchiveBoxArrowDownIcon,
   WrenchScrewdriverIcon,
   ChartBarIcon,
   PresentationChartLineIcon,
@@ -25,6 +26,16 @@ const accesos = computed(() => {
       { label: 'Estadísticas', icon: PresentationChartLineIcon, to: { name: 'mis-stats' } },
     ]
   }
+  if (auth.usuario?.rol === 'ebanista') {
+    return [
+      { label: 'Mis pasos', icon: WrenchScrewdriverIcon, to: { name: 'mis-pasos' } },
+    ]
+  }
+  if (auth.usuario?.rol === 'despachador') {
+    return [
+      { label: 'Despacho producción', icon: TruckIcon, to: { name: 'despacho-produccion' } },
+    ]
+  }
 
   const items = [
     { label: 'Nueva orden',  icon: PlusIcon, to: { name: 'nueva-orden' } },
@@ -35,6 +46,10 @@ const accesos = computed(() => {
 
   if (auth.isSupervisor) {
     items.push({ label: 'Producción', icon: WrenchScrewdriverIcon, to: { name: 'produccion' } })
+    if (auth.isTapicero) {
+      items.push({ label: 'Mis pasos', icon: WrenchScrewdriverIcon,     to: { name: 'mis-pasos' } })
+      items.push({ label: 'Surtir',    icon: ArchiveBoxArrowDownIcon,   to: { name: 'surtir'    } })
+    }
   }
 
   items.push({ label: auth.isSupervisor ? 'Mis estadísticas' : 'Estadísticas', icon: PresentationChartLineIcon, to: { name: 'mis-stats' } })

@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { useAuthStore } from '@/stores/auth'
 import { useRouter } from 'vue-router'
 import {
@@ -44,15 +44,62 @@ const nuevoEstado = ref('')
 const motivoRetraso = ref('')
 const modalLoading = ref(false)
 
-const estadosOpts = [
-  { value: '',           label: 'Todos' },
-  { value: 'pendiente',  label: 'Pendiente' },
-  { value: 'en_proceso', label: 'En proceso' },
-  { value: 'listo',      label: 'Listo' },
-  { value: 'retrasado',  label: 'Retrasado' },
-  { value: 'entregado',  label: 'Entregado' },
-  { value: 'cancelado',  label: 'Cancelado' },
+// Pasos de producción (para cuando se cambia a en_proceso)
+const PROCESOS_DISPONIBLES = [
+  { tipo: 'ebanisteria', label: 'Ebanistería', desc: 'Madera, lija y pintura' },
+  { tipo: 'tapizado',    label: 'Tapizado',    desc: 'Telas y relleno' },
+  { tipo: 'laca',        label: 'Laca',        desc: 'Acabado final' },
 ]
+const pasosSeleccionados = ref([]) // [{tipo_proceso, orden}] en orden de selección
+const pasoSelectorRef   = ref(null)
+
+watch(nuevoEstado, (val) => {
+  if (val === 'en_proceso') {
+    nextTick(() => pasoSelectorRef.value?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }))
+  }
+})
+
+function togglePaso(tipo) {
+  const idx = pasosSeleccionados.value.findIndex(p => p.tipo_proceso === tipo)
+  if (idx !== -1) {
+    pasosSeleccionados.value.splice(idx, 1)
+    // Recalcular órdenes
+    pasosSeleccionados.value = pasosSeleccionados.value.map((p, i) => ({ ...p, orden: i + 1 }))
+  } else {
+    pasosSeleccionados.value.push({ tipo_proceso: tipo, orden: pasosSeleccionados.value.length + 1 })
+  }
+}
+
+function ordenDePaso(tipo) {
+  return pasosSeleccionados.value.find(p => p.tipo_proceso === tipo)?.orden ?? null
+}
+
+const estadosOpts = [
+  { value: '',                     label: 'Todos' },
+  { value: 'pendiente',            label: 'Pendiente' },
+  { value: 'en_proceso',           label: 'En proceso' },
+  { value: 'pendiente_despachador',label: 'En despacho prod.' },
+  { value: 'listo',                label: 'Listo' },
+  { value: 'retrasado',            label: 'Retrasado' },
+  { value: 'entregado',            label: 'Entregado' },
+  { value: 'cancelado',            label: 'Cancelado' },
+]
+
+function pasoActualLabel(p) {
+  if (!p.pasos || p.pasos.length === 0) return null
+  const activo = p.pasos.find(x => x.estado === 'en_proceso')
+  if (activo) return { label: labelProceso(activo.tipo_proceso), cls: 'bg-blue-100 text-blue-700' }
+  const pendiente = p.pasos.find(x => x.estado === 'pendiente')
+  if (pendiente) return { label: `Próx: ${labelProceso(pendiente.tipo_proceso)}`, cls: 'bg-gray-100 text-gray-500' }
+  const todos = p.pasos.every(x => x.estado === 'completado')
+  if (todos && p.estado !== 'listo') return { label: 'Todos los pasos listos', cls: 'bg-green-100 text-green-700' }
+  return null
+}
+
+function labelProceso(tipo) {
+  const m = { ebanisteria: 'Ebanistería', tapizado: 'Tapizado', laca: 'Laca' }
+  return m[tipo] ?? tipo
+}
 
 function badgeInfo(p) {
   if (p.estado === 'cancelado') {
@@ -60,6 +107,9 @@ function badgeInfo(p) {
   }
   if (p.estado === 'pendiente') {
     return { label: 'Pendiente', cls: 'bg-yellow-100 text-yellow-700' }
+  }
+  if (p.estado === 'pendiente_despachador') {
+    return { label: 'En despacho prod.', cls: 'bg-purple-100 text-purple-700' }
   }
   if (p.estado === 'retrasado' || (p.estado === 'en_proceso' && p.dias_restantes !== null && p.dias_restantes < 0)) {
     return { label: 'Retrasado', cls: 'bg-red-100 text-red-700' }
@@ -141,6 +191,14 @@ function openModal(p) {
   produccionSeleccionada.value = p
   nuevoEstado.value = p.estado
   motivoRetraso.value = ''
+  pasosSeleccionados.value = []
+  // Si ya tiene pasos, pre-cargarlos
+  if (p.pasos && p.pasos.length > 0) {
+    pasosSeleccionados.value = p.pasos
+      .filter(x => x.estado !== 'completado')
+      .map(x => ({ tipo_proceso: x.tipo_proceso, orden: x.orden }))
+      .sort((a, b) => a.orden - b.orden)
+  }
   mostrarModal.value = true
 }
 
@@ -150,12 +208,19 @@ async function guardarEstado() {
     toast.error('Debes indicar el motivo del retraso.')
     return
   }
+  if (nuevoEstado.value === 'en_proceso' && pasosSeleccionados.value.length === 0) {
+    toast.error('Debes seleccionar al menos un proceso de producción.')
+    return
+  }
 
   modalLoading.value = true
   try {
     const data = { estado: nuevoEstado.value }
     if (motivoRetraso.value.trim()) {
       data.motivo_retraso = motivoRetraso.value.trim()
+    }
+    if (nuevoEstado.value === 'en_proceso') {
+      data.pasos = pasosSeleccionados.value
     }
     await updateProduccion(produccionSeleccionada.value.id, data)
     mostrarModal.value = false
@@ -172,7 +237,6 @@ function diasInfo(p) {
   const d = p.dias_restantes
   if (d === null || d === undefined) return null
 
-  // Días totales del período (inicio → compromiso)
   const inicio = new Date(String(p.fecha_inicio).substring(0, 10) + 'T00:00:00')
   const fin    = new Date(String(p.fecha_compromiso).substring(0, 10) + 'T00:00:00')
   const total  = Math.max(1, Math.round((fin - inicio) / 86400000))
@@ -306,7 +370,7 @@ onUnmounted(() => {
           class="bg-white rounded-xl shadow-sm p-4 space-y-2 cursor-pointer active:scale-[0.99] transition-transform"
           @click="router.push({ name: 'orden-detalle', params: { id: p.orden_item?.orden?.id } })"
         >
-          <!-- Producto + badge de días -->
+          <!-- Producto + badge de estado -->
           <div class="flex justify-between items-start">
             <div class="flex-1 min-w-0">
               <p class="font-medium text-sm text-gray-800 truncate">{{ p.orden_item?.producto?.nombre }}</p>
@@ -318,6 +382,28 @@ onUnmounted(() => {
               <component :is="estadoIcon(p)" class="w-3.5 h-3.5" />
               {{ badgeInfo(p).label }}
             </span>
+          </div>
+
+          <!-- Paso actual de producción -->
+          <div v-if="pasoActualLabel(p)" class="flex items-center gap-1.5">
+            <span class="text-xs text-gray-400">Paso:</span>
+            <span :class="['text-xs font-medium px-2 py-0.5 rounded-full', pasoActualLabel(p).cls]">
+              {{ pasoActualLabel(p).label }}
+            </span>
+            <!-- Mini progreso de pasos -->
+            <div v-if="p.pasos && p.pasos.length > 0" class="flex gap-1 ml-auto">
+              <span
+                v-for="paso in p.pasos"
+                :key="paso.id"
+                :class="[
+                  'inline-block w-5 h-1.5 rounded-full',
+                  paso.estado === 'completado' ? 'bg-green-400' :
+                  paso.estado === 'en_proceso'  ? 'bg-blue-400' :
+                  'bg-gray-200'
+                ]"
+                :title="labelProceso(paso.tipo_proceso)"
+              />
+            </div>
           </div>
 
           <!-- Info -->
@@ -370,7 +456,7 @@ onUnmounted(() => {
     <Transition name="fade">
       <div v-if="mostrarModal" class="fixed inset-0 z-50 flex items-end sm:items-center justify-center" @click.self="mostrarModal = false">
         <div class="absolute inset-0 bg-black/40" />
-        <div class="relative bg-white rounded-t-2xl sm:rounded-2xl w-full sm:max-w-md p-5 space-y-4">
+        <div class="relative bg-white rounded-t-2xl sm:rounded-2xl w-full sm:max-w-md p-5 space-y-4 max-h-[92vh] overflow-y-auto pb-8">
           <div class="flex items-center justify-between">
             <h3 class="text-lg font-bold text-gray-800">Cambiar estado</h3>
             <button @click="mostrarModal = false" class="text-gray-400 text-2xl leading-none">&times;</button>
@@ -389,6 +475,47 @@ onUnmounted(() => {
               <option value="entregado">Entregado</option>
               <option value="cancelado">Cancelado</option>
             </select>
+          </div>
+
+          <!-- Selector de pasos (solo cuando se elige "en_proceso") -->
+          <div v-if="nuevoEstado === 'en_proceso'" ref="pasoSelectorRef" class="space-y-3">
+            <div>
+              <p class="text-sm font-semibold text-gray-800 mb-1">
+                Selecciona los pasos de producción
+                <span class="text-red-500">*</span>
+              </p>
+              <p class="text-xs text-gray-400 mb-3">Toca los procesos en el orden en que se deben realizar. El número indica la secuencia.</p>
+              <div class="space-y-2">
+                <button
+                  v-for="proc in PROCESOS_DISPONIBLES"
+                  :key="proc.tipo"
+                  type="button"
+                  @click="togglePaso(proc.tipo)"
+                  :class="[
+                    'w-full flex items-center gap-3 px-3 py-3 rounded-xl border-2 transition-all text-left',
+                    ordenDePaso(proc.tipo)
+                      ? 'border-blue-500 bg-blue-50'
+                      : 'border-gray-200 bg-white hover:border-gray-300'
+                  ]"
+                >
+                  <span
+                    :class="[
+                      'w-7 h-7 rounded-full flex items-center justify-center text-sm font-bold flex-shrink-0',
+                      ordenDePaso(proc.tipo) ? 'bg-blue-500 text-white' : 'bg-gray-100 text-gray-400'
+                    ]"
+                  >
+                    {{ ordenDePaso(proc.tipo) ?? '+' }}
+                  </span>
+                  <div>
+                    <p class="text-sm font-semibold text-gray-800">{{ proc.label }}</p>
+                    <p class="text-xs text-gray-500">{{ proc.desc }}</p>
+                  </div>
+                </button>
+              </div>
+              <p v-if="pasosSeleccionados.length > 0" class="text-xs text-blue-600 mt-2">
+                Orden seleccionado: {{ pasosSeleccionados.map(p => ({ ebanisteria: 'Ebanistería', tapizado: 'Tapizado', laca: 'Laca' }[p.tipo_proceso])).join(' → ') }}
+              </p>
+            </div>
           </div>
 
           <div v-if="nuevoEstado === 'retrasado'">

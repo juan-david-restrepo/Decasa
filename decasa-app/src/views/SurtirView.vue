@@ -26,6 +26,13 @@ import { TELAS_CATALOGO, marcasOrdenadas, tiposTelaDeM, coloresDeTela } from '@/
 
 const toast = useToast()
 
+// ── Telas — solo para productos tapizados ────────────────────────────────────
+const KEYWORDS_TELA = ['sofa', 'sofá', 'silla', 'sillón', 'sillon', 'mueble', 'tapiceria', 'tapicería', 'tapizado']
+function necesitaTela(prod) {
+  const cat = (prod?.categoria ?? '').toLowerCase().trim()
+  return KEYWORDS_TELA.some(k => cat.includes(k))
+}
+
 // ── Telas — opciones en cascada ───────────────────────────────────────────────
 const _todosTipos = (() => {
   const s = new Set()
@@ -470,41 +477,44 @@ onMounted(async () => {
           <Transition name="slide">
             <div v-if="especAbiertos[idx]" class="px-3 pb-3 pt-2 bg-gray-50 border-t border-gray-100 space-y-2">
 
-              <!-- Fila 1: Marca + Tipo de tela -->
-              <div class="grid grid-cols-2 gap-2">
-                <div>
-                  <label class="text-[11px] font-medium text-gray-500">Marca de tela</label>
-                  <ComboInput
-                    :model-value="item.especificaciones.marca"
-                    :options="marcasOrdenadas"
-                    placeholder="Ej: Visual, Arthometextil…"
-                    class="mt-0.5"
-                    @update:model-value="v => onMarcaChange(item, v)"
-                  />
+              <!-- Tela/color — solo para productos tapizados -->
+              <template v-if="necesitaTela(item.producto)">
+                <!-- Fila 1: Marca + Tipo de tela -->
+                <div class="grid grid-cols-2 gap-2">
+                  <div>
+                    <label class="text-[11px] font-medium text-gray-500">Marca de tela</label>
+                    <ComboInput
+                      :model-value="item.especificaciones.marca"
+                      :options="marcasOrdenadas"
+                      placeholder="Ej: Visual, Arthometextil…"
+                      class="mt-0.5"
+                      @update:model-value="v => onMarcaChange(item, v)"
+                    />
+                  </div>
+                  <div>
+                    <label class="text-[11px] font-medium text-gray-500">Tipo de tela</label>
+                    <ComboInput
+                      :model-value="item.especificaciones.tela"
+                      :options="tiposParaEsp(item.especificaciones)"
+                      placeholder="Ej: Bistro, Kanvas…"
+                      class="mt-0.5"
+                      @update:model-value="v => onTelaChange(item, v)"
+                    />
+                  </div>
                 </div>
-                <div>
-                  <label class="text-[11px] font-medium text-gray-500">Tipo de tela</label>
-                  <ComboInput
-                    :model-value="item.especificaciones.tela"
-                    :options="tiposParaEsp(item.especificaciones)"
-                    placeholder="Ej: Bistro, Kanvas…"
-                    class="mt-0.5"
-                    @update:model-value="v => onTelaChange(item, v)"
-                  />
-                </div>
-              </div>
 
-              <!-- Fila 2: Color (ancho completo) -->
-              <div>
-                <label class="text-[11px] font-medium text-gray-500">Color</label>
-                <ComboInput
-                  :model-value="item.especificaciones.color"
-                  :options="coloresParaEsp(item.especificaciones)"
-                  :placeholder="coloresParaEsp(item.especificaciones).length ? 'Selecciona o escribe un color…' : 'Ej: Marfil, Beige…'"
-                  class="mt-0.5"
-                  @update:model-value="v => item.especificaciones.color = v"
-                />
-              </div>
+                <!-- Fila 2: Color (ancho completo) -->
+                <div>
+                  <label class="text-[11px] font-medium text-gray-500">Color</label>
+                  <ComboInput
+                    :model-value="item.especificaciones.color"
+                    :options="coloresParaEsp(item.especificaciones)"
+                    :placeholder="coloresParaEsp(item.especificaciones).length ? 'Selecciona o escribe un color…' : 'Ej: Marfil, Beige…'"
+                    class="mt-0.5"
+                    @update:model-value="v => item.especificaciones.color = v"
+                  />
+                </div>
+              </template>
 
               <!-- Fila 3: Medidas + Acabado -->
               <div class="grid grid-cols-2 gap-2">

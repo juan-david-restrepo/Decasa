@@ -288,7 +288,7 @@ async function guardarStock() {
 
 // ── Categorías que admiten variantes de tela/color ───────────────────────────
 // Incluye formas con y sin tilde para cubrir cualquier escritura en la BD
-const KEYWORDS_TAPIZADOS = ['sofa', 'sofá', 'silla', 'sillón', 'sillon', 'tapiz', 'tela', 'mueble', 'tapiceria', 'tapicería', 'cojin', 'cojín']
+const KEYWORDS_TAPIZADOS = ['sofa', 'sofá', 'silla', 'sillón', 'sillon', 'mueble', 'tapiceria', 'tapicería', 'tapizado']
 
 function esTapizado(item) {
   const cat = (item.producto?.categoria ?? '').toLowerCase().trim()
@@ -626,8 +626,8 @@ onMounted(async () => {
             </span>
           </div>
 
-          <!-- Variantes tela/color -->
-          <div class="border-t border-gray-100 pt-2">
+          <!-- Variantes tela/color — solo para productos tapizados -->
+          <div v-if="esTapizado(item)" class="border-t border-gray-100 pt-2">
             <div class="flex items-center gap-2">
               <span class="text-xs text-blue-600 font-medium">Variantes de tela/color</span>
               <span v-if="variantesData[item.producto_id]?.length"
